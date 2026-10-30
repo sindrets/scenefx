@@ -68,6 +68,7 @@ endif
 
 features = {
 	'gles2-renderer': false,
+	'vulkan-renderer': false,
 	'color-management': false,
 }
 internal_features = {
@@ -89,11 +90,21 @@ wayland_server = dependency('wayland-server',
 
 wlroots_options = [ 'examples=false' ]
 wlroots_version = ['>=0.20.0', '<0.21.0']
-wlroots = dependency('wlroots-0.20',
+# Prefer the wlroots-vkfx fork when installed: the Vulkan FX renderer needs
+# the render pass internals that it exports.
+
+wlroots = dependency('wlroots-vkfx-0.20',
 	version: wlroots_version,
 	default_options: wlroots_options,
 	required: false,
 )
+if not wlroots.found()
+	wlroots = dependency('wlroots-0.20',
+		version: wlroots_version,
+		default_options: wlroots_options,
+		required: false,
+	)
+endif
 if not wlroots.found()
 	wlroots_proj = subproject(
 		'wlroots',
@@ -105,6 +116,7 @@ endif
 
 renderers = {
 	'gles2': wlroots.get_variable('have_gles2_renderer') == 'true',
+	'vulkan': wlroots.get_variable('have_vulkan_renderer') == 'true',
 }
 
 drm = dependency('libdrm',

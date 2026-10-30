@@ -5,12 +5,18 @@
 #if WLR_HAS_GLES2_RENDERER
 #include <wlr/render/gles2.h>
 #endif
+#if WLR_HAS_VULKAN_RENDERER
+#include <wlr/render/vulkan.h>
+#endif
 
 #include "render/fx_renderer.h"
 #include "render/tracy.h"
 #include "scenefx/scenefx.h"
 #if WLR_HAS_GLES2_RENDERER
 #include "render/gles2/gles2.h"
+#endif
+#if WLR_HAS_VULKAN_RENDERER
+#include "render/vulkan/vulkan.h"
 #endif
 
 static void scene_addon_handle_destroy(struct wlr_addon *addon) {
@@ -99,7 +105,7 @@ struct fx_renderer *scenefx_init_from_wlr_renderer(struct wlr_renderer *wlr_rend
 		struct wlr_scene *wlr_scene) {
 	assert(wlr_renderer);
 
-#define HAS_ANY_RENDERERS WLR_HAS_GLES2_RENDERER /* TODO: Add more has renderer checks here */
+#define HAS_ANY_RENDERERS (WLR_HAS_GLES2_RENDERER || WLR_HAS_VULKAN_RENDERER)
 #if !HAS_ANY_RENDERERS
 	wlr_log(WLR_ERROR,
 			"Could not initialize SceneFX as it wasn't compiled with any renderers. "
@@ -114,7 +120,12 @@ struct fx_renderer *scenefx_init_from_wlr_renderer(struct wlr_renderer *wlr_rend
 		goto renderer_created;
 	}
 #endif
-	// TODO: Add more renderers
+#if WLR_HAS_VULKAN_RENDERER
+	if (wlr_renderer_is_vk(wlr_renderer)) {
+		fx_renderer = vk_renderer_create(wlr_renderer);
+		goto renderer_created;
+	}
+#endif
 
 	// No FX Renderer found for the given wlr_renderer type
 	wlr_log(WLR_ERROR, "Could not initialize SceneFX: "

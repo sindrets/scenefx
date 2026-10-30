@@ -7,6 +7,8 @@ scenefx_files += files(
 	'tracy.c',
 )
 
+subdir('common_shaders')
+
 if renderers['gles2']
 	egl = dependency('egl', required: 'gles2' in renderers)
 	if egl.found()
@@ -32,6 +34,9 @@ if renderers['gles2']
 	subdir('gles2')
 endif
 
+if renderers['vulkan']
+	subdir('vulkan')
+endif
 lcms2 = dependency('lcms2', required: get_option('color-management'))
 if lcms2.found()
 	scenefx_deps += lcms2
