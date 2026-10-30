@@ -1351,8 +1351,13 @@ static void vk_render_pass_add_texture(struct fx_render_pass *fx_pass,
 		return;
 	}
 
+	// Pass the client's explicit sync point along: scenefx records its own
+	// texture draws, so this call is the only way the wlroots pass learns it
+	// must wait for the buffer's timeline before reading the texture. Dropping
+	// it here would silently ignore explicit sync for every scene buffer.
 	VkDescriptorSet ds = wlr_vk_render_pass_get_texture_ds(pass->fx_render_pass.render_pass,
-		options->texture, options->filter_mode, tf);
+		options->texture, options->filter_mode, tf,
+		options->wait_timeline, options->wait_point);
 	if (ds == VK_NULL_HANDLE) {
 		wlr_log(WLR_ERROR, "Failed to get a vulkan texture descriptor set");
 		return;
