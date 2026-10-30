@@ -169,11 +169,20 @@ bool vk_shader_info_create_tex(struct vk_renderer *renderer);
 /// Blur
 ///
 
-// Field order matches blur1.frag/blur2.frag: the vec2 comes first so it keeps
-// its 8 byte alignment without needing explicit padding.
+// Field order must match blur1.frag/blur2.frag exactly: std430 aligns a vec2
+// to 8 bytes, so an explicit pad is needed after the scalar `radius`. Without
+// it the compiler packs uv_min at offset 12 while the shader reads offset 16,
+// and the push constant range 8 bytes short of what the shader declares.
 struct vk_frag_blur_pcr_data {
 	float halfpixel[2];
 	float radius;
+	float _pad;
+	// Texel centres of the already-rendered source area. Taps outside it read
+	// stale buffer contents (the coarse levels only occupy the top-left corner
+	// of the image), so the shaders clamp to this box and extend the edges
+	// instead. Mirrors GLES2's uv_min/uv_max in blur1.frag and blur2.frag.
+	float uv_min[2];
+	float uv_max[2];
 };
 
 // Matches blur_effects.frag, which applies brightness/contrast/saturation/noise

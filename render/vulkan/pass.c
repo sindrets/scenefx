@@ -974,7 +974,7 @@ static void vk_render_pass_add_box_shadow(struct fx_render_pass *fx_pass,
 static void render_blur_step(struct vk_render_pass *pass,
 		struct vk_effect_image *dst, VkDescriptorSet src_ds,
 		struct vk_pipeline_blur *blur_pipeline, const pixman_region32_t *region,
-		float radius, bool downsample) {
+		float radius, bool downsample, int src_level) {
 	struct vk_renderer *renderer = pass->vk_renderer;
 	VkCommandBuffer cb = pass->command_buffer;
 
@@ -1019,12 +1019,45 @@ static void render_blur_step(struct vk_render_pass *pass,
 	// Downsample reads from a texture twice the size of the area being written
 	// (blur1.frag does uv * 2.0); upsample the other way around.
 	float scale = downsample ? 2.0f : 0.5f;
+	// The valid source area is the top-left (1 / 2^level) of the image: the
+	// blur chain keeps its content there and leaves the rest untouched, so a tap
+	// outside it would average in whatever the image previously held. Clamp to
+	// the texel centres of that area and extend the edge instead, exactly as
+	// GLES2's uv_min/uv_max do in blur1.frag and blur2.frag. It matters most for
+	// blur2, which reads a region twice as wide as it writes.
+	float tex_width = dst->width;
+	float tex_height = dst->height;
+	// Clamp every tap to the area the previous step actually wrote. The chain
+	// keeps its content in a sub-region of each image and leaves the rest
+	// untouched, so a tap outside it averages in whatever the image held
+	// before. GLES2 avoids this by allocating a separate buffer per level, so
+	// its texture->width IS the level size; scenefx's effect images are all
+	// full output size, so the valid area has to come from the region instead.
+	// `region` is what this step WRITES; what it READS is `scale` times that,
+	// since blur1 samples twice what it writes (uv * 2.0) and blur2 half
+	// (uv / 2.0).
+	pixman_box32_t *extents =
+		pixman_region32_extents((pixman_region32_t *)region);
+	float src_x1 = extents->x1 * scale;
+	float src_y1 = extents->y1 * scale;
+	float src_x2 = extents->x2 * scale;
+	float src_y2 = extents->y2 * scale;
+	(void)src_level;
+
 	struct vk_frag_blur_pcr_data blur_pcr_data = {
 		.halfpixel = {
-			0.5f / (dst->width / scale),
-			0.5f / (dst->height / scale),
+			0.5f / (tex_width / scale),
+			0.5f / (tex_height / scale),
 		},
 		.radius = radius,
+		.uv_min = {
+			(src_x1 + 0.5f) / tex_width,
+			(src_y1 + 0.5f) / tex_height,
+		},
+		.uv_max = {
+			(src_x2 - 0.5f) / tex_width,
+			(src_y2 - 0.5f) / tex_height,
+		},
 	};
 
 	VkPipelineLayout layout = blur_pipeline->pipeline_layout;
@@ -1186,7 +1219,7 @@ static void vk_render_pass_add_blur(struct fx_render_pass *fx_pass,
 	for (int i = 0; i < blur_data.num_passes; i++) {
 		wlr_region_scale(&scaled_damage, &damage, 1.0f / (1 << (i + 1)));
 		render_blur_step(pass, &renderer->effect_images[dst_index], src_ds,
-			pipelines->blur1, &scaled_damage, blur_data.radius, true);
+			pipelines->blur1, &scaled_damage, blur_data.radius, true, i);
 		src_ds = renderer->effect_images[dst_index].ds;
 		dst_index ^= 1;
 	}
@@ -1194,7 +1227,7 @@ static void vk_render_pass_add_blur(struct fx_render_pass *fx_pass,
 	for (int i = blur_data.num_passes - 1; i >= 0; i--) {
 		wlr_region_scale(&scaled_damage, &damage, 1.0f / (1 << i));
 		render_blur_step(pass, &renderer->effect_images[dst_index], src_ds,
-			pipelines->blur2, &scaled_damage, blur_data.radius, false);
+			pipelines->blur2, &scaled_damage, blur_data.radius, false, i + 1);
 		src_ds = renderer->effect_images[dst_index].ds;
 		dst_index ^= 1;
 	}
@@ -1356,12 +1389,12 @@ static bool vk_render_pass_add_optimized_blur(struct fx_render_pass *fx_pass,
 		return false;
 	}
 
+	// TODO: optimized blur. Return false so the scene keeps the node dirty and
+	// re-tries it, which is the same thing a failure does; the zone is closed
+	// here rather than left open, so GPU timestamps stay balanced.
 	TRACY_GPU_ZONE_START(fx_pass->fx_renderer);
-
-	// TODO: optimized blur
 	TRACY_GPU_ZONE_END;
 	return false;
-	TRACY_GPU_ZONE_END;
 }
 
 ///

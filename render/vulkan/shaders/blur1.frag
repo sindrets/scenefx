@@ -12,16 +12,25 @@ layout(set = 0, binding = 0) uniform sampler2D tex;
 layout(push_constant) uniform UBO {
 	layout(offset = 80) vec2 halfpixel;
 	float radius;
+	// Texel centres of the valid (already rendered) source area.
+	vec2 uv_min;
+	vec2 uv_max;
 } data;
+
+// Taps that land outside the rendered area would read stale buffer contents,
+// so clamp them and extend the edge instead.
+vec4 sample_tex(vec2 p) {
+	return texture(tex, clamp(p, data.uv_min, data.uv_max));
+}
 
 void main() {
 	vec2 suv = uv * 2.0;
 
-	vec4 sum = texture(tex, suv) * 4.0;
-	sum += texture(tex, suv - data.halfpixel.xy * data.radius);
-	sum += texture(tex, suv + data.halfpixel.xy * data.radius);
-	sum += texture(tex, suv + vec2(data.halfpixel.x, -data.halfpixel.y) * data.radius);
-	sum += texture(tex, suv - vec2(data.halfpixel.x, -data.halfpixel.y) * data.radius);
+	vec4 sum = sample_tex(suv) * 4.0;
+	sum += sample_tex(suv - data.halfpixel.xy * data.radius);
+	sum += sample_tex(suv + data.halfpixel.xy * data.radius);
+	sum += sample_tex(suv + vec2(data.halfpixel.x, -data.halfpixel.y) * data.radius);
+	sum += sample_tex(suv - vec2(data.halfpixel.x, -data.halfpixel.y) * data.radius);
 
 	out_color = sum / 8.0;
 }
