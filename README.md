@@ -63,7 +63,7 @@ newer, so the differences below are deliberate or still open:
 | Blur (dual-Kawase) | yes | yes |
 | Blur transparency mask | stencil | sampled mask texture |
 | Blur padding save/restore | yes | yes |
-| Optimized blur nodes | yes | **not yet** |
+| Optimized blur nodes | yes | yes |
 | Explicit sync (`wait_timeline`) | yes | yes |
 | Device-lost propagation | yes | yes |
 | Tracy GPU zones | yes | yes |
@@ -77,13 +77,12 @@ Two things are worth knowing before switching a compositor over:
   output is therefore *correct* rather than identical - high-contrast content
   differs by roughly 8-11% while solid areas match exactly. Sharp (unblurred)
   content is pixel-identical between the two renderers.
-* **Optimized blur is not implemented on Vulkan.**
-  `wlr_scene_optimized_blur_create()` nodes render nothing at all — they stay
-  dirty and re-render every frame without ever drawing, so the area simply is not
-  blurred. Blur nodes with `wlr_scene_blur_set_should_only_blur_bottom_layer()`
-  do blur correctly, but by re-blurring every frame instead of reusing a cached
-  buffer, so they cost more than on GLES2. Regular `wlr_scene_blur_create()`
-  nodes are unaffected. If you rely on the optimized variant, stay on GLES2.
+* **Blur nodes that request the optimized path do not reuse the cache yet.**
+  `wlr_scene_optimized_blur_create()` nodes work: the blur is rendered once into
+  a renderer-owned cache and composited from there. But nodes marked with
+  `wlr_scene_blur_set_should_only_blur_bottom_layer()` still re-blur every frame
+  rather than sampling that cache, so they cost more than on GLES2. This is a
+  performance gap, not a visual one.
 
 `wlr_render_timer` requires wlroots work first: its Vulkan renderer has no
 `render_timer_create` at all, so the call returns `NULL` regardless of SceneFX.
