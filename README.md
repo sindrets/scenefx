@@ -46,6 +46,48 @@ Just replace your calls to `wlr_renderer_autocreate()` with `scenefx_init()`
 providing your wlr_scene and wlr_backend structs and replace all
 `wlr/types/wlr_scene.h` includes with `scenefx/types/wlr_scene.h`.
 
+SceneFX picks an FX renderer matching whatever `wlr_renderer` it is given, so
+the usual `WLR_RENDERER` selection applies: `gles2` (the default) or `vulkan`.
+
+## Renderer support
+
+Both FX renderers are feature-complete for the scene API. The Vulkan one is
+newer, so the differences below are deliberate or still open:
+
+| Feature | GLES2 | Vulkan |
+| --- | --- | --- |
+| Rects, textures, clipping | yes | yes |
+| Rounded corners | yes | yes |
+| Linear and radial gradients | yes | yes |
+| Box shadows | yes | yes |
+| Blur (dual-Kawase) | yes | yes |
+| Blur transparency mask | stencil | sampled mask texture |
+| Blur padding save/restore | yes | yes |
+| Optimized blur nodes | yes | **not yet** |
+| Explicit sync (`wait_timeline`) | yes | yes |
+| Device-lost propagation | yes | yes |
+| Tracy GPU zones | yes | yes |
+| `wlr_render_timer` | yes | **not yet** |
+
+Two things are worth knowing before switching a compositor over:
+
+* **Blur is computed in linear light on Vulkan.** GLES2 averages already-encoded
+  sRGB bytes, which is the classic gamma-space blur error and makes blurred
+  content too dark; Vulkan blurs the 16-bit float blending image instead. The
+  output is therefore *correct* rather than identical - high-contrast content
+  differs by roughly 8-11% while solid areas match exactly. Sharp (unblurred)
+  content is pixel-identical between the two renderers.
+* **Optimized blur is not implemented on Vulkan.**
+  `wlr_scene_optimized_blur_create()` nodes render nothing at all — they stay
+  dirty and re-render every frame without ever drawing, so the area simply is not
+  blurred. Blur nodes with `wlr_scene_blur_set_should_only_blur_bottom_layer()`
+  do blur correctly, but by re-blurring every frame instead of reusing a cached
+  buffer, so they cost more than on GLES2. Regular `wlr_scene_blur_create()`
+  nodes are unaffected. If you rely on the optimized variant, stay on GLES2.
+
+`wlr_render_timer` requires wlroots work first: its Vulkan renderer has no
+`render_timer_create` at all, so the call returns `NULL` regardless of SceneFX.
+
 ## Troubleshooting
 
 ### Using scenefx features breaks the compositor
