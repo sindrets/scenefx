@@ -471,33 +471,34 @@ error:
 	return false;
 }
 
-bool vk_optimized_blur_ensure(struct vk_renderer *renderer,
-		VkRenderPass render_pass, uint32_t width, uint32_t height) {
+bool vk_optimized_blur_ensure(struct vk_effect_image *cache,
+		struct vk_renderer *renderer, VkRenderPass render_pass,
+		uint32_t width, uint32_t height) {
 	if (render_pass == VK_NULL_HANDLE) {
 		return false;
 	}
-	struct vk_effect_image *img = &renderer->optimized_blur.image;
-	if (img->image != VK_NULL_HANDLE && img->width == width && img->height == height) {
+	if (cache->image != VK_NULL_HANDLE && cache->width == width &&
+			cache->height == height) {
 		return true;
 	}
-	vk_optimized_blur_finish(renderer);
+	vk_optimized_blur_finish(cache, renderer);
 	// effect_image_init() only reads renderer->effect_render_pass to create the
 	// framebuffer, and vk_render_pass_add_optimized_blur() always calls
 	// vk_effect_images_ensure() just before this, so the field already holds the
 	// scene pass. Do not assign it here: it is the effect images' identity, and
 	// overwriting it would make vk_effect_images_ensure() skip the rebuild their
 	// own framebuffers may need.
-	if (!effect_image_init(renderer, img, width, height)) {
-		vk_optimized_blur_finish(renderer);
+	if (!effect_image_init(renderer, cache, width, height)) {
+		vk_optimized_blur_finish(cache, renderer);
 		return false;
 	}
 	return true;
 }
 
-void vk_optimized_blur_finish(struct vk_renderer *renderer) {
-	struct vk_effect_image *img = &renderer->optimized_blur.image;
-	if (img->image == VK_NULL_HANDLE && img->ds == VK_NULL_HANDLE) {
+void vk_optimized_blur_finish(struct vk_effect_image *cache,
+		struct vk_renderer *renderer) {
+	if (cache->image == VK_NULL_HANDLE && cache->ds == VK_NULL_HANDLE) {
 		return;
 	}
-	effect_image_finish(renderer, img);
+	effect_image_finish(renderer, cache);
 }

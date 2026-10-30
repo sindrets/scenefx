@@ -32,7 +32,8 @@ static inline void free_shaders(struct vk_renderer *vk_renderer) {
 	// allocated from them, which the effect images own.
 	vk_tex_ds_layout_destroy(vk_renderer);
 	vk_saved_pixels_finish(vk_renderer);
-	vk_optimized_blur_finish(vk_renderer);
+	// The optimized-blur caches are per output and torn down with their
+	// output's offscreen buffers, in offscreen_buffers_destroy().
 
 	if (vk_renderer->gradient_ds_layout != VK_NULL_HANDLE) {
 		vkDestroyDescriptorSetLayout(vk_renderer->device,
@@ -122,6 +123,9 @@ static void offscreen_buffers_destroy(struct fx_offscreen_buffers *fx_offscreen_
 		wlr_buffer_drop(vk_offscreen_buffers->effects_buffer_swapped->wlr_buffer);
 		vk_offscreen_buffers->effects_buffer_swapped = NULL;
 	}
+	// The optimized-blur cache is a renderer-owned VkImage, not a wlr_buffer.
+	vk_optimized_blur_finish(&vk_offscreen_buffers->optimized_blur,
+		vk_get_renderer(fx_offscreen_buffers->fx_renderer));
 
 	free(vk_offscreen_buffers);
 }

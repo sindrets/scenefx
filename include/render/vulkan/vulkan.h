@@ -30,6 +30,24 @@ void vk_buffer_get_or_allocate(struct fx_renderer *fx_renderer,
 /** Note: Doesn't drop the wlr_buffer, so should only be used internally. */
 void vk_buffer_destroy(struct vk_buffer *buffer);
 
+/**
+ * Offscreen colour target for the blur chain. Full output size: the dual-Kawase
+ * down/up scaling is expressed by shrinking the scissor rather than the image,
+ * matching the GLES2 implementation (and what blur1.frag's `uv * 2.0` expects).
+ */
+struct vk_effect_image {
+	VkImage image;
+	VkDeviceMemory memory;
+	VkImageView view;
+	VkFramebuffer framebuffer;
+	VkDescriptorSet ds;
+	uint32_t width, height;
+	// Tracked so the barrier before each use knows the source layout. The scene
+	// render pass declares finalLayout SHADER_READ_ONLY_OPTIMAL, so after any
+	// use the image sits there; before first use it is still UNDEFINED.
+	VkImageLayout layout;
+};
+
 struct vk_offscreen_buffers {
 	struct fx_offscreen_buffers fx_offscreen_buffers;
 
@@ -46,6 +64,24 @@ struct vk_offscreen_buffers {
 	struct vk_buffer *effects_buffer;
 	// Swap buffer used for effects
 	struct vk_buffer *effects_buffer_swapped;
+
+	// Backing store for the optimized blur cache, the Vulkan counterpart of
+	// GLES2's optimized_blur_buffer: the blurred bottom layer for this output.
+	//
+	// Two writers, and they must agree, or the cache feeds itself:
+	//
+	//  - WLR_SCENE_NODE_OPTIMIZED_BLUR nodes refill it and draw nothing. The
+	//    scene calls one of those once while it is dirty and then never draws
+	//    it again, so a node that painted its own output here would have that
+	//    paint blurred back into the next refill.
+	//  - Blur nodes with use_optimized_blur read it instead of re-blurring.
+	//    scenefx sets that from should_only_blur_bottom_layer, which MangoWM
+	//    enables via blur_optimized=1 (its default). This is what makes the
+	//    blur visible at all.
+	//
+	// Per output rather than per renderer: two monitors of different sizes
+	// would otherwise tear down and rebuild each other's cache every frame.
+	struct vk_effect_image optimized_blur;
 };
 
 struct vk_offscreen_buffers *vk_get_offscreen_buffers(
@@ -118,24 +154,6 @@ void vk_render_setup_destroy(struct vk_renderer *renderer, struct vk_render_setu
 // Two targets are enough: the dual-Kawase chain only ever ping-pongs between a
 // source and a destination.
 #define VK_EFFECT_IMAGE_COUNT 2
-
-/**
- * Offscreen colour target for the blur chain. Full output size: the dual-Kawase
- * down/up scaling is expressed by shrinking the scissor rather than the image,
- * matching the GLES2 implementation (and what blur1.frag's `uv * 2.0` expects).
- */
-struct vk_effect_image {
-	VkImage image;
-	VkDeviceMemory memory;
-	VkImageView view;
-	VkFramebuffer framebuffer;
-	VkDescriptorSet ds;
-	uint32_t width, height;
-	// Tracked so the barrier before each use knows the source layout. The scene
-	// render pass declares finalLayout SHADER_READ_ONLY_OPTIMAL, so after any
-	// use the image sits there; before first use it is still UNDEFINED.
-	VkImageLayout layout;
-};
 
 struct vk_renderer {
 	struct fx_renderer fx_renderer;
@@ -215,22 +233,6 @@ struct vk_renderer {
 		VkImageLayout layout;
 	} mask_view;
 
-	// Backing store for an optimized blur node (WLR_SCENE_NODE_OPTIMIZED_BLUR)
-	// and for the nodes that ask to be composited from a cached blur without
-	// re-blurring every frame (use_optimized_blur).
-	//
-	// A full-buffer 16F render target rather than a wl_allocator buffer: the
-	// chain produces 16F, so filling it by drawing costs no format conversion,
-	// and holding it as an effect image gives it a descriptor set that the same
-	// blur_effects pipeline samples directly when the cache is composited.
-	//
-	// No validity flag is needed: the scene only calls the optimized path when a
-	// node is dirty, and marks the node clean when the call succeeds, so the
-	// image is always refilled before it is shown.
-	struct {
-		struct vk_effect_image image;
-	} optimized_blur;
-
 	// Cached sampler descriptor set for the wlroots blend image, rebuilt only
 	// when the underlying image view changes.
 	VkDescriptorSet blend_ds;
@@ -278,9 +280,11 @@ bool vk_saved_pixels_ensure(struct vk_renderer *renderer,
 void vk_saved_pixels_finish(struct vk_renderer *renderer);
 
 /** (Re)create the optimized-blur cache at the given output size. */
-bool vk_optimized_blur_ensure(struct vk_renderer *renderer,
-	VkRenderPass render_pass, uint32_t width, uint32_t height);
-void vk_optimized_blur_finish(struct vk_renderer *renderer);
+bool vk_optimized_blur_ensure(struct vk_effect_image *cache,
+		struct vk_renderer *renderer, VkRenderPass render_pass,
+		uint32_t width, uint32_t height);
+void vk_optimized_blur_finish(struct vk_effect_image *cache,
+		struct vk_renderer *renderer);
 VkDescriptorSet vk_get_blend_ds(struct vk_renderer *renderer, VkImageView view);
 
 /**
