@@ -988,7 +988,8 @@ bool vk_shader_info_create_blur_effects(struct vk_renderer *renderer) {
 // The blur passes write into offscreen buffers and fully replace their
 // contents, so unlike the quad pipeline they disable blending.
 static bool create_pipeline_blur(struct vk_renderer *renderer, struct vk_render_setup *setup,
-		struct vk_shader_info *shader, struct vk_pipeline *variant) {
+		struct vk_shader_info *shader, struct vk_pipeline *variant,
+		bool premultiplied) {
 	VkPipelineShaderStageCreateInfo stages[] = {
 		(VkPipelineShaderStageCreateInfo) {
 			.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -1017,8 +1018,18 @@ static bool create_pipeline_blur(struct vk_renderer *renderer, struct vk_render_
 		.lineWidth = 1.f,
 	};
 
+	// blur1/blur2 fully replace their offscreen target, so they must not blend.
+	// blur_effects is the composite into the scene and blends like every other
+	// scenefx draw: with blending off, the rounded corners (where corner_alpha
+	// drives alpha to 0) would overwrite the background with opaque black.
 	VkPipelineColorBlendAttachmentState blend_attachment = {
-		.blendEnable = false,
+		.blendEnable = premultiplied,
+		.srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
+		.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+		.colorBlendOp = VK_BLEND_OP_ADD,
+		.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+		.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+		.alphaBlendOp = VK_BLEND_OP_ADD,
 		.colorWriteMask =
 			VK_COLOR_COMPONENT_R_BIT |
 			VK_COLOR_COMPONENT_G_BIT |
@@ -1087,13 +1098,14 @@ static bool create_pipeline_blur(struct vk_renderer *renderer, struct vk_render_
 }
 
 static struct vk_pipeline_blur *create_one_blur_pipeline(struct vk_renderer *renderer,
-		struct vk_render_setup *setup, struct vk_shader_info *shader) {
+		struct vk_render_setup *setup, struct vk_shader_info *shader,
+		bool premultiplied) {
 	struct vk_pipeline_blur *blur = calloc(1, sizeof(*blur));
 	if (blur == NULL) {
 		return NULL;
 	}
 	blur->pipeline.pipeline = VK_NULL_HANDLE;
-	if (!create_pipeline_blur(renderer, setup, shader, &blur->pipeline)) {
+	if (!create_pipeline_blur(renderer, setup, shader, &blur->pipeline, premultiplied)) {
 		free(blur);
 		return NULL;
 	}
@@ -1104,10 +1116,12 @@ static struct vk_pipeline_blur *create_one_blur_pipeline(struct vk_renderer *ren
 bool create_vk_blur_pipelines(struct vk_renderer *renderer, struct vk_render_setup *setup,
 		struct vk_pipeline_blur **out_blur1, struct vk_pipeline_blur **out_blur2,
 		struct vk_pipeline_blur **out_blur_effects) {
-	*out_blur1 = create_one_blur_pipeline(renderer, setup, &renderer->shader_info.blur1);
-	*out_blur2 = create_one_blur_pipeline(renderer, setup, &renderer->shader_info.blur2);
+	*out_blur1 = create_one_blur_pipeline(renderer, setup,
+			&renderer->shader_info.blur1, false);
+	*out_blur2 = create_one_blur_pipeline(renderer, setup,
+			&renderer->shader_info.blur2, false);
 	*out_blur_effects = create_one_blur_pipeline(renderer, setup,
-			&renderer->shader_info.blur_effects);
+			&renderer->shader_info.blur_effects, true);
 
 	if (*out_blur1 == NULL || *out_blur2 == NULL || *out_blur_effects == NULL) {
 		wlr_log(WLR_ERROR, "Could not create blur shader pipelines");
