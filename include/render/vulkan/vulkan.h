@@ -215,6 +215,22 @@ struct vk_renderer {
 		VkImageLayout layout;
 	} mask_view;
 
+	// Backing store for an optimized blur node (WLR_SCENE_NODE_OPTIMIZED_BLUR)
+	// and for the nodes that ask to be composited from a cached blur without
+	// re-blurring every frame (use_optimized_blur).
+	//
+	// A full-buffer 16F render target rather than a wl_allocator buffer: the
+	// chain produces 16F, so filling it by drawing costs no format conversion,
+	// and holding it as an effect image gives it a descriptor set that the same
+	// blur_effects pipeline samples directly when the cache is composited.
+	//
+	// No validity flag is needed: the scene only calls the optimized path when a
+	// node is dirty, and marks the node clean when the call succeeds, so the
+	// image is always refilled before it is shown.
+	struct {
+		struct vk_effect_image image;
+	} optimized_blur;
+
 	// Cached sampler descriptor set for the wlroots blend image, rebuilt only
 	// when the underlying image view changes.
 	VkDescriptorSet blend_ds;
@@ -260,6 +276,11 @@ void vk_effect_image_prepare_target(VkCommandBuffer cb, struct vk_effect_image *
 bool vk_saved_pixels_ensure(struct vk_renderer *renderer,
 	uint32_t width, uint32_t height);
 void vk_saved_pixels_finish(struct vk_renderer *renderer);
+
+/** (Re)create the optimized-blur cache at the given output size. */
+bool vk_optimized_blur_ensure(struct vk_renderer *renderer,
+	VkRenderPass render_pass, uint32_t width, uint32_t height);
+void vk_optimized_blur_finish(struct vk_renderer *renderer);
 VkDescriptorSet vk_get_blend_ds(struct vk_renderer *renderer, VkImageView view);
 
 /**

@@ -1084,6 +1084,49 @@ static void render_blur_step(struct vk_render_pass *pass,
 	pass->bound_pipeline = VK_NULL_HANDLE;
 }
 
+/**
+ * Run the dual-Kawase chain into the effect-image ping-pong and return the
+ * descriptor set of the image holding the blurred result.
+ *
+ * The scene pass must already be suspended: each step records its own render
+ * pass on an effect framebuffer. `damage` is the node's region expanded for
+ * edge taps, in output coordinates.
+ */
+static VkDescriptorSet render_blur_chain(struct vk_render_pass *pass,
+		struct vk_pipelines *pipelines, VkDescriptorSet src_ds,
+		const pixman_region32_t *damage, const struct blur_data *blur_data) {
+	struct vk_renderer *renderer = pass->vk_renderer;
+
+	pixman_region32_t scaled_damage;
+	pixman_region32_init(&scaled_damage);
+
+	// Ping-pong between the two effect images; the first read is whatever holds
+	// the unblurred source.
+	size_t dst_index = 0;
+
+	for (int i = 0; i < blur_data->num_passes; i++) {
+		wlr_region_scale(&scaled_damage, damage, 1.0f / (1 << (i + 1)));
+		render_blur_step(pass, &renderer->effect_images[dst_index], src_ds,
+			pipelines->blur1, &scaled_damage, blur_data->radius, true, i);
+		src_ds = renderer->effect_images[dst_index].ds;
+		dst_index ^= 1;
+	}
+
+	for (int i = blur_data->num_passes - 1; i >= 0; i--) {
+		wlr_region_scale(&scaled_damage, damage, 1.0f / (1 << i));
+		render_blur_step(pass, &renderer->effect_images[dst_index], src_ds,
+			pipelines->blur2, &scaled_damage, blur_data->radius, false, i + 1);
+		src_ds = renderer->effect_images[dst_index].ds;
+		dst_index ^= 1;
+	}
+
+	pixman_region32_fini(&scaled_damage);
+
+	// dst_index was advanced past the last write; step back to the image that
+	// actually holds the blurred result.
+	return renderer->effect_images[dst_index ^ 1].ds;
+}
+
 static void vk_render_pass_add_blur(struct fx_render_pass *fx_pass,
 		const struct fx_render_blur_pass_options *fx_options) {
 	// A lost device rejects everything, so record nothing and let the
@@ -1208,35 +1251,9 @@ static void vk_render_pass_add_blur(struct fx_render_pass *fx_pass,
 	}
 
 
-	pixman_region32_t scaled_damage;
-	pixman_region32_init(&scaled_damage);
-
-	// Ping-pong between the two effect images; the first read is the blend image
-	// holding everything drawn so far.
-	VkDescriptorSet src_ds = blend_ds;
-	size_t dst_index = 0;
-
-	for (int i = 0; i < blur_data.num_passes; i++) {
-		wlr_region_scale(&scaled_damage, &damage, 1.0f / (1 << (i + 1)));
-		render_blur_step(pass, &renderer->effect_images[dst_index], src_ds,
-			pipelines->blur1, &scaled_damage, blur_data.radius, true, i);
-		src_ds = renderer->effect_images[dst_index].ds;
-		dst_index ^= 1;
-	}
-
-	for (int i = blur_data.num_passes - 1; i >= 0; i--) {
-		wlr_region_scale(&scaled_damage, &damage, 1.0f / (1 << i));
-		render_blur_step(pass, &renderer->effect_images[dst_index], src_ds,
-			pipelines->blur2, &scaled_damage, blur_data.radius, false, i + 1);
-		src_ds = renderer->effect_images[dst_index].ds;
-		dst_index ^= 1;
-	}
-
-	pixman_region32_fini(&scaled_damage);
-
-	// dst_index was advanced past the last write; step back to the image that
-	// actually holds the blurred result.
-	size_t result_index = dst_index ^ 1;
+	// The chain reads the blend image, which holds everything drawn so far.
+	VkDescriptorSet result_ds = render_blur_chain(pass, pipelines, blend_ds,
+		&damage, &blur_data);
 
 	if (!wlr_vk_render_pass_resume(fx_pass->render_pass)) {
 		pixman_region32_fini(&damage);
@@ -1324,7 +1341,6 @@ static void vk_render_pass_add_blur(struct fx_render_pass *fx_pass,
 }
 
 	VkPipelineLayout layout = pipelines->blur_effects->pipeline_layout;
-	VkDescriptorSet result_ds = renderer->effect_images[result_index].ds;
 	// Composite only where the caller asked for blur. `damage` is deliberately
 	// wider (expanded so edge taps have neighbours) and must NOT be used here:
 	// painting the blurred image across the expanded area covers unrelated
@@ -1380,6 +1396,248 @@ static void vk_render_pass_add_blur(struct fx_render_pass *fx_pass,
 	TRACY_GPU_ZONE_END;
 }
 
+/**
+ * Composite the optimized-blur cache onto the scene.
+ *
+ * Mirrors the tail of vk_render_pass_add_blur(): same shader, same projection,
+ * same rounding and mask handling, so a cached blur is visually identical to a
+ * freshly computed one. The descriptor set is the cache image's own, whose
+ * binding 1 (the mask) this writes each time.
+ */
+static bool render_blur_cache_onto_scene(struct fx_render_pass *fx_pass,
+		struct vk_render_pass *pass, struct vk_pipelines *pipelines,
+		VkDescriptorSet cache_ds,
+		const struct fx_render_blur_pass_options *fx_options,
+		const struct blur_data *blur_data) {
+	struct vk_renderer *renderer = pass->vk_renderer;
+	struct wlr_buffer *buffer = pass->render_buffer->wlr_buffer;
+	VkCommandBuffer cb = pass->command_buffer;
+
+	// The node's own box: the composite must cover exactly this, while the
+	// chain was free to blur a wider area so its edge taps had neighbours.
+	struct wlr_box node_box = fx_options->tex_options.base.dst_box;
+	if (wlr_box_empty(&node_box)) {
+		node_box = (struct wlr_box){ 0, 0, buffer->width, buffer->height };
+	}
+
+	// The mask, if any, is the texture the scene passed for the node.
+	VkImageView mask_view = VK_NULL_HANDLE;
+	VkImageLayout mask_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+	bool has_mask = false;
+	if (fx_options->ignore_transparent &&
+			fx_options->tex_options.base.texture != NULL) {
+		struct wlr_texture *mask_tex = fx_options->tex_options.base.texture;
+		enum wlr_color_transfer_function mask_tf =
+			fx_options->tex_options.base.transfer_function;
+		if (mask_tf == 0) {
+			mask_tf = WLR_COLOR_TRANSFER_FUNCTION_GAMMA22;
+		}
+		VkDescriptorSet sync_ds =
+			wlr_vk_render_pass_get_texture_ds(fx_pass->render_pass, mask_tex,
+				fx_options->tex_options.base.filter_mode, mask_tf,
+				fx_options->tex_options.base.wait_timeline,
+				fx_options->tex_options.base.wait_point);
+		if (sync_ds == VK_NULL_HANDLE) {
+			wlr_log(WLR_ERROR, "Failed to register the optimized blur mask texture");
+			return false;
+		}
+		struct wlr_vk_image_attribs attribs;
+		wlr_vk_texture_get_image_attribs(mask_tex, &attribs);
+		mask_view = vk_mask_view_get(renderer, attribs.image, attribs.format,
+			&mask_layout);
+		if (mask_view == VK_NULL_HANDLE) {
+			wlr_log(WLR_ERROR, "Failed to create a view of the optimized blur mask");
+			return false;
+		}
+		has_mask = true;
+	}
+
+	float proj[9] = {
+		2, 0, -1,
+		0, 2, -1,
+		0, 0,  1,
+	};
+	struct vk_vert_pcr_data vert_pcr_data = {
+		.uv_off = { 0, 0 },
+		.uv_size = { 1, 1 },
+	};
+	encode_proj_matrix(proj, vert_pcr_data.mat4);
+
+	struct vk_frag_blur_effects_pcr_data effects_pcr_data = {
+		.brightness = blur_data->brightness,
+		.contrast = blur_data->contrast,
+		.saturation = blur_data->saturation,
+		.noise = blur_data->noise,
+	};
+	push_rounding_data(&effects_pcr_data.corner_rounding,
+		&fx_options->tex_options.base.dst_box, &fx_options->tex_options.corners);
+
+	effects_pcr_data.has_mask = has_mask ? 1.0f : 0.0f;
+	effects_pcr_data.ignore_alpha_threshold = fx_options->ignore_alpha_threshold;
+	if (has_mask) {
+		struct wlr_texture *mask_tex = fx_options->tex_options.base.texture;
+		struct wlr_fbox src_fbox;
+		wlr_render_texture_options_get_src_box(&fx_options->tex_options.base,
+			&src_fbox);
+		struct wlr_box dst = node_box;
+		float src_size[2] = {
+			src_fbox.width / mask_tex->width,
+			src_fbox.height / mask_tex->height,
+		};
+		float src_off[2] = {
+			src_fbox.x / mask_tex->width,
+			src_fbox.y / mask_tex->height,
+		};
+		for (int i = 0; i < 2; i++) {
+			float out_size = i == 0 ? buffer->width : buffer->height;
+			float dst_off = i == 0 ? dst.x : dst.y;
+			float dst_size = i == 0 ? dst.width : dst.height;
+			if (dst_size <= 0) {
+				dst_size = out_size;
+			}
+			effects_pcr_data.mask_uv_size[i] = (out_size / dst_size) * src_size[i];
+			effects_pcr_data.mask_uv[i] =
+				src_off[i] - (dst_off / dst_size) * src_size[i];
+		}
+	}
+
+	// Clip to the node's own box, not to the expanded damage the chain needed:
+	// the cache was blurred over the box grown for edge taps, and compositing
+	// that whole area would paint over content the node does not cover.
+	pixman_region32_t composite_clip;
+	pixman_region32_init_rect(&composite_clip, node_box.x, node_box.y,
+		node_box.width, node_box.height);
+	if (fx_options->tex_options.base.clip != NULL) {
+		pixman_region32_intersect(&composite_clip, &composite_clip,
+			fx_options->tex_options.base.clip);
+	}
+	pixman_region32_intersect_rect(&composite_clip, &composite_clip, 0, 0,
+		buffer->width, buffer->height);
+
+	VkPipelineLayout layout = pipelines->blur_effects->pipeline_layout;
+	if (!vk_tex_ds_set_mask(renderer, cache_ds,
+			has_mask ? mask_view : VK_NULL_HANDLE, mask_layout)) {
+		wlr_log(WLR_ERROR, "Failed to bind the optimized blur mask");
+		pixman_region32_fini(&composite_clip);
+		return false;
+	}
+	vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+		pipelines->blur_effects->pipeline.pipeline);
+	vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout,
+		0, 1, &cache_ds, 0, NULL);
+	vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_VERTEX_BIT,
+		0, sizeof(vert_pcr_data), &vert_pcr_data);
+	vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_FRAGMENT_BIT,
+		sizeof(vert_pcr_data), sizeof(effects_pcr_data), &effects_pcr_data);
+
+	int rects_len;
+	const pixman_box32_t *rects =
+		pixman_region32_rectangles(&composite_clip, &rects_len);
+	for (int i = 0; i < rects_len; i++) {
+		VkRect2D rect;
+		convert_pixman_box_to_vk_rect(&rects[i], &rect);
+		vkCmdSetScissor(cb, 0, 1, &rect);
+		vkCmdDraw(cb, 4, 1, 0, 0);
+	}
+
+	wlr_vk_render_pass_reset_pipeline(fx_pass->render_pass);
+	pass->bound_pipeline = VK_NULL_HANDLE;
+	pixman_region32_fini(&composite_clip);
+	return true;
+}
+
+/**
+ * Draw a blurred descriptor set into the optimized-blur cache image.
+ *
+ * Same shader as the on-scene composite, but with every effect neutral and no
+ * rounding or mask: the cache stores the node's underlying picture, and those
+ * are applied when the cache is composited onto the output. Rendering into a
+ * separate target is what makes the result reusable next frame.
+ *
+ * Must be called with the scene pass suspended.
+ */
+static bool render_blur_into_cache(struct vk_render_pass *pass,
+		struct vk_pipelines *pipelines, VkDescriptorSet src_ds,
+		const pixman_region32_t *region, struct vk_effect_image *cache) {
+	struct vk_renderer *renderer = pass->vk_renderer;
+	VkCommandBuffer cb = pass->command_buffer;
+
+	int rects_len;
+	const pixman_box32_t *rects = pixman_region32_rectangles(region, &rects_len);
+	if (rects_len == 0) {
+		return true;
+	}
+
+	vk_effect_image_prepare_target(cb, cache);
+
+	VkRenderPassBeginInfo rp_info = {
+		.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+		.renderArea = (VkRect2D){ .extent = { cache->width, cache->height } },
+		.clearValueCount = 0,
+		.renderPass = renderer->effect_render_pass,
+		.framebuffer = cache->framebuffer,
+	};
+	vkCmdBeginRenderPass(cb, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
+	vkCmdSetViewport(cb, 0, 1, &(VkViewport){
+		.width = cache->width,
+		.height = cache->height,
+		.maxDepth = 1,
+	});
+
+	float proj[9] = {
+		2, 0, -1,
+		0, 2, -1,
+		0, 0,  1,
+	};
+	struct vk_vert_pcr_data vert_pcr_data = {
+		.uv_off = { 0, 0 },
+		.uv_size = { 1, 1 },
+	};
+	encode_proj_matrix(proj, vert_pcr_data.mat4);
+
+	// The chain does not apply the brightness/contrast/saturation/noise stage -
+	// that happens in the composite - and the cache is composited later with
+	// the node's real settings, so everything stays neutral here.
+	struct vk_frag_blur_effects_pcr_data effects_pcr_data = {
+		.brightness = 1.0f,
+		.contrast = 1.0f,
+		.saturation = 1.0f,
+		.noise = 0.0f,
+		.has_mask = 0.0f,
+	};
+
+	VkPipelineLayout layout = pipelines->blur_effects->pipeline_layout;
+	if (!vk_tex_ds_set_mask(renderer, cache->ds, VK_NULL_HANDLE,
+			VK_IMAGE_LAYOUT_UNDEFINED)) {
+		vkCmdEndRenderPass(cb);
+		wlr_vk_render_pass_reset_pipeline(pass->fx_render_pass.render_pass);
+		pass->bound_pipeline = VK_NULL_HANDLE;
+		return false;
+	}
+
+	vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+		pipelines->blur_effects->pipeline.pipeline);
+	vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout,
+		0, 1, &src_ds, 0, NULL);
+	vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_VERTEX_BIT,
+		0, sizeof(vert_pcr_data), &vert_pcr_data);
+	vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_FRAGMENT_BIT,
+		sizeof(vert_pcr_data), sizeof(effects_pcr_data), &effects_pcr_data);
+
+	for (int i = 0; i < rects_len; i++) {
+		VkRect2D rect;
+		convert_pixman_box_to_vk_rect(&rects[i], &rect);
+		vkCmdSetScissor(cb, 0, 1, &rect);
+		vkCmdDraw(cb, 4, 1, 0, 0);
+	}
+
+	vkCmdEndRenderPass(cb);
+
+	wlr_vk_render_pass_reset_pipeline(pass->fx_render_pass.render_pass);
+	pass->bound_pipeline = VK_NULL_HANDLE;
+	return true;
+}
+
 static bool vk_render_pass_add_optimized_blur(struct fx_render_pass *fx_pass,
 		const struct fx_render_blur_pass_options *fx_options) {
 	// A lost device rejects everything, so record nothing and let the
@@ -1389,12 +1647,95 @@ static bool vk_render_pass_add_optimized_blur(struct fx_render_pass *fx_pass,
 		return false;
 	}
 
-	// TODO: optimized blur. Return false so the scene keeps the node dirty and
-	// re-tries it, which is the same thing a failure does; the zone is closed
-	// here rather than left open, so GPU timestamps stay balanced.
 	TRACY_GPU_ZONE_START(fx_pass->fx_renderer);
+
+	struct vk_render_pass *pass = vk_get_render_pass(fx_pass);
+	struct vk_renderer *renderer = pass->vk_renderer;
+
+	struct blur_data blur_data = blur_data_apply_strength(
+		fx_options->blur_data, fx_options->blur_strength);
+	if (fx_options->blur_strength <= 0 || !is_scene_blur_enabled(&blur_data)) {
+		TRACY_GPU_ZONE_END;
+		return false;
+	}
+
+	struct wlr_buffer *buffer = pass->render_buffer->wlr_buffer;
+	VkImageView blend_view =
+		wlr_vk_render_pass_get_blend_image_view(fx_pass->render_pass);
+	if (blend_view == VK_NULL_HANDLE) {
+		TRACY_GPU_ZONE_END;
+		return false;
+	}
+	VkRenderPass scene_pass = wlr_vk_render_pass_get_render_pass(fx_pass->render_pass);
+	if (!vk_effect_images_ensure(renderer, scene_pass, buffer->width, buffer->height) ||
+			!vk_optimized_blur_ensure(renderer, scene_pass,
+				buffer->width, buffer->height)) {
+		TRACY_GPU_ZONE_END;
+		return false;
+	}
+	VkDescriptorSet blend_ds = vk_get_blend_ds(renderer, blend_view);
+	struct vk_pipelines *pipelines = &pass->render_setup->vk_pipelines;
+	if (blend_ds == VK_NULL_HANDLE || pipelines->blur1 == NULL ||
+			pipelines->blur2 == NULL || pipelines->blur_effects == NULL) {
+		TRACY_GPU_ZONE_END;
+		return false;
+	}
+
+	// Blur the node's box, expanded so the taps near its edge have neighbours,
+	// then clamped to the output.
+	struct wlr_box dst = fx_options->tex_options.base.dst_box;
+	if (wlr_box_empty(&dst)) {
+		dst = (struct wlr_box){ 0, 0, buffer->width, buffer->height };
+	}
+	pixman_region32_t damage;
+	pixman_region32_init_rect(&damage, dst.x, dst.y, dst.width, dst.height);
+	wlr_region_expand(&damage, &damage, blur_data_calc_size(&blur_data));
+	pixman_region32_intersect_rect(&damage, &damage, 0, 0,
+		buffer->width, buffer->height);
+	if (pixman_region32_empty(&damage)) {
+		pixman_region32_fini(&damage);
+		TRACY_GPU_ZONE_END;
+		return false;
+	}
+
+	if (!wlr_vk_render_pass_suspend(fx_pass->render_pass)) {
+		pixman_region32_fini(&damage);
+		TRACY_GPU_ZONE_END;
+		return false;
+	}
+
+	// Fill the cache. `result_ds` aliases one of the effect images, which the
+	// next blur in this frame will overwrite, so the cache has to hold its own
+	// copy before returning.
+	VkDescriptorSet result_ds = render_blur_chain(pass, pipelines, blend_ds,
+		&damage, &blur_data);
+
+	bool ok = render_blur_into_cache(pass, pipelines, result_ds, &damage,
+		&renderer->optimized_blur.image);
+
+	pixman_region32_fini(&damage);
+
+	if (!wlr_vk_render_pass_resume(fx_pass->render_pass)) {
+		TRACY_GPU_ZONE_END;
+		return false;
+	}
+
+	if (!ok) {
+		TRACY_GPU_ZONE_END;
+		return false;
+	}
+
+	// The cache is now the node's appearance, so show it the way any other
+	// blur node is shown: composite it onto the scene through blur_effects,
+	// which also applies the node's rounding and transparency mask.
+	if (!render_blur_cache_onto_scene(fx_pass, pass, pipelines,
+			renderer->optimized_blur.image.ds, fx_options, &blur_data)) {
+		TRACY_GPU_ZONE_END;
+		return false;
+	}
+
 	TRACY_GPU_ZONE_END;
-	return false;
+	return true;
 }
 
 ///
