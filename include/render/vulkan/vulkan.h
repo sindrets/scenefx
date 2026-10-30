@@ -206,6 +206,14 @@ struct vk_renderer {
 	VkCommandBuffer tracy_command_buffer;
 	// vkResetQueryPool entrypoint, resolved at runtime; NULL when unavailable.
 	PFN_vkResetQueryPool tracy_reset_query_pool;
+
+	// Set once the device has been lost. Vulkan drops the device on its own
+	// when that happens, and every later call into it fails, so all subsequent
+	// work is skipped and the loss is reported to the compositor a single time.
+	bool device_lost;
+	// Whether that loss has already been reported to the compositor, so it is
+	// told once rather than on every subsequent frame.
+	bool device_lost_reported;
 };
 
 /**
@@ -234,8 +242,38 @@ VkDescriptorSet vk_get_blend_ds(struct vk_renderer *renderer, VkImageView view);
 /** Index of a memory type satisfying props, or -1. */
 int vk_find_mem_type(struct vk_renderer *renderer,
 	VkMemoryPropertyFlags props, uint32_t type_bits);
-
 const char *vulkan_strerror(VkResult err);
+
+/**
+ * Whether the renderer's VkDevice has been lost and is unusable.
+ *
+ * Once this is true every pass fails quietly instead of submitting work that
+ * Vulkan would reject anyway.
+ */
+bool vk_renderer_device_lost(struct vk_renderer *renderer);
+
+/**
+ * Whether the device is lost and has not been reported to the compositor yet.
+ *
+ * Consumes the pending report: only the first call after a loss returns true,
+ * so the wlr_renderer.events.lost signal fires exactly once per loss even
+ * though every following frame still finds the device gone.
+ */
+bool vk_renderer_take_device_lost(struct vk_renderer *renderer);
+
+/**
+ * Report a Vulkan failure, and mark the device lost if `res` says it is.
+ *
+ * A lost device is reported to the compositor through
+ * wlr_renderer.events.lost exactly once; the renderer keeps no usable state
+ * afterwards. Returns true if the device was lost, so callers can bail out.
+ *
+ * Must not be used once the compositor may have destroyed the renderer, i.e.
+ * after wlr_renderer.events.destroy - see the deferred reporting in
+ * vk_render_pass_init().
+ */
+bool vk_renderer_handle_result(struct vk_renderer *renderer,
+		const char *what, VkResult res);
 
 #if __STDC_VERSION__ >= 202311L
 

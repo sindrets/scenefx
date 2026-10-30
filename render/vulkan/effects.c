@@ -48,7 +48,10 @@ static void effect_image_finish(struct vk_renderer *renderer,
 	// previous frame's command buffer may still reference the descriptor set,
 	// and freeing one that is in use is invalid. Rare enough that a full idle
 	// wait is cheaper than tracking per-frame lifetimes.
-	vkDeviceWaitIdle(dev);
+	//
+	// The wait fails on a lost device; the objects are dead anyway and Vulkan
+	// permits destroying them, so the result is reported but never fatal.
+	vk_renderer_handle_result(renderer, "vkDeviceWaitIdle", vkDeviceWaitIdle(dev));
 	if (img->ds != VK_NULL_HANDLE) {
 		vk_tex_ds_destroy(renderer, img->ds);
 	}
@@ -79,7 +82,7 @@ static bool effect_image_init(struct vk_renderer *renderer,
 	};
 	res = vkCreateImage(dev, &img_info, NULL, &img->image);
 	if (res != VK_SUCCESS) {
-		wlr_log(WLR_ERROR, "vkCreateImage failed for effect image");
+		vk_renderer_handle_result(renderer, "vkCreateImage", res);
 		goto error;
 	}
 
@@ -100,13 +103,13 @@ static bool effect_image_init(struct vk_renderer *renderer,
 	};
 	res = vkAllocateMemory(dev, &mem_info, NULL, &img->memory);
 	if (res != VK_SUCCESS) {
-		wlr_log(WLR_ERROR, "vkAllocateMemory failed for effect image");
+		vk_renderer_handle_result(renderer, "vkAllocateMemory", res);
 		goto error;
 	}
 
 	res = vkBindImageMemory(dev, img->image, img->memory, 0);
 	if (res != VK_SUCCESS) {
-		wlr_log(WLR_ERROR, "vkBindImageMemory failed for effect image");
+		vk_renderer_handle_result(renderer, "vkBindImageMemory", res);
 		goto error;
 	}
 
@@ -123,7 +126,7 @@ static bool effect_image_init(struct vk_renderer *renderer,
 	};
 	res = vkCreateImageView(dev, &view_info, NULL, &img->view);
 	if (res != VK_SUCCESS) {
-		wlr_log(WLR_ERROR, "vkCreateImageView failed for effect image");
+		vk_renderer_handle_result(renderer, "vkCreateImageView", res);
 		goto error;
 	}
 
@@ -138,7 +141,7 @@ static bool effect_image_init(struct vk_renderer *renderer,
 	};
 	res = vkCreateFramebuffer(dev, &fb_info, NULL, &img->framebuffer);
 	if (res != VK_SUCCESS) {
-		wlr_log(WLR_ERROR, "vkCreateFramebuffer failed for effect image");
+		vk_renderer_handle_result(renderer, "vkCreateFramebuffer", res);
 		goto error;
 	}
 
@@ -207,7 +210,8 @@ VkDescriptorSet vk_get_blend_ds(struct vk_renderer *renderer, VkImageView view) 
 	}
 	if (renderer->blend_ds != VK_NULL_HANDLE) {
 		// Same in-use hazard as effect_image_finish().
-		vkDeviceWaitIdle(renderer->device);
+		vk_renderer_handle_result(renderer, "vkDeviceWaitIdle",
+			vkDeviceWaitIdle(renderer->device));
 		vk_tex_ds_destroy(renderer, renderer->blend_ds);
 	}
 	renderer->blend_ds = vk_tex_ds_create(renderer, view);
@@ -248,7 +252,8 @@ void vk_saved_pixels_finish(struct vk_renderer *renderer) {
 	if (renderer->saved_pixels.image == VK_NULL_HANDLE) {
 		return;
 	}
-	vkDeviceWaitIdle(renderer->device);
+	vk_renderer_handle_result(renderer, "vkDeviceWaitIdle",
+		vkDeviceWaitIdle(renderer->device));
 	vkDestroyImage(renderer->device, renderer->saved_pixels.image, NULL);
 	vkFreeMemory(renderer->device, renderer->saved_pixels.memory, NULL);
 	renderer->saved_pixels.image = VK_NULL_HANDLE;
@@ -281,8 +286,10 @@ bool vk_saved_pixels_ensure(struct vk_renderer *renderer,
 		.extent = (VkExtent3D){ width, height, 1 },
 		.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
 	};
-	if (vkCreateImage(dev, &img_info, NULL, &renderer->saved_pixels.image) != VK_SUCCESS) {
-		wlr_log(WLR_ERROR, "vkCreateImage failed for blur saved pixels");
+	VkResult res = vkCreateImage(dev, &img_info, NULL,
+		&renderer->saved_pixels.image);
+	if (res != VK_SUCCESS) {
+		vk_renderer_handle_result(renderer, "vkCreateImage", res);
 		return false;
 	}
 
@@ -299,11 +306,16 @@ bool vk_saved_pixels_ensure(struct vk_renderer *renderer,
 		.allocationSize = mem_reqs.size,
 		.memoryTypeIndex = mem_type,
 	};
-	if (vkAllocateMemory(dev, &mem_info, NULL, &renderer->saved_pixels.memory) != VK_SUCCESS) {
+	res = vkAllocateMemory(dev, &mem_info, NULL,
+		&renderer->saved_pixels.memory);
+	if (res != VK_SUCCESS) {
+		vk_renderer_handle_result(renderer, "vkAllocateMemory", res);
 		goto error;
 	}
-	if (vkBindImageMemory(dev, renderer->saved_pixels.image,
-			renderer->saved_pixels.memory, 0) != VK_SUCCESS) {
+	res = vkBindImageMemory(dev, renderer->saved_pixels.image,
+		renderer->saved_pixels.memory, 0);
+	if (res != VK_SUCCESS) {
+		vk_renderer_handle_result(renderer, "vkBindImageMemory", res);
 		goto error;
 	}
 

@@ -358,6 +358,13 @@ static void vk_render_pass_destroy(struct fx_render_pass *fx_pass) {
 
 static void vk_render_pass_add_rect(struct fx_render_pass *fx_pass,
 		const struct fx_render_rect_options *fx_options) {
+	// A lost device rejects everything, so record nothing and let the
+	// compositor's listener take over. vk_render_pass_init() is what actually
+	// reports the loss; the pass it returns is the first thing to notice.
+	if (vk_renderer_device_lost(vk_get_render_pass(fx_pass)->vk_renderer)) {
+		return;
+	}
+
 	TRACY_GPU_ZONE_START(fx_pass->fx_renderer);
 
 	const struct wlr_render_rect_options *options = &fx_options->base;
@@ -435,6 +442,13 @@ static void vk_render_pass_add_rect(struct fx_render_pass *fx_pass,
 
 static void vk_render_pass_add_rounded_rect(struct fx_render_pass *fx_pass,
 		const struct fx_render_rounded_rect_options *fx_options) {
+	// A lost device rejects everything, so record nothing and let the
+	// compositor's listener take over. vk_render_pass_init() is what actually
+	// reports the loss; the pass it returns is the first thing to notice.
+	if (vk_renderer_device_lost(vk_get_render_pass(fx_pass)->vk_renderer)) {
+		return;
+	}
+
 	TRACY_GPU_ZONE_START(fx_pass->fx_renderer);
 
 	const struct wlr_render_rect_options *options = &fx_options->base;
@@ -590,7 +604,7 @@ static struct vk_gradient_arena *create_gradient_arena(struct vk_render_pass *pa
 	};
 	VkResult res = vkCreateBuffer(dev, &buffer_info, NULL, &arena->buffer);
 	if (res != VK_SUCCESS) {
-		wlr_vk_error("vkCreateBuffer", res);
+		vk_renderer_handle_result(vk_renderer, "vkCreateBuffer", res);
 		goto error;
 	}
 
@@ -612,19 +626,19 @@ static struct vk_gradient_arena *create_gradient_arena(struct vk_render_pass *pa
 	};
 	res = vkAllocateMemory(dev, &mem_info, NULL, &arena->memory);
 	if (res != VK_SUCCESS) {
-		wlr_vk_error("vkAllocateMemory", res);
+		vk_renderer_handle_result(vk_renderer, "vkAllocateMemory", res);
 		goto error;
 	}
 
 	res = vkBindBufferMemory(dev, arena->buffer, arena->memory, 0);
 	if (res != VK_SUCCESS) {
-		wlr_vk_error("vkBindBufferMemory", res);
+		vk_renderer_handle_result(vk_renderer, "vkBindBufferMemory", res);
 		goto error;
 	}
 
 	res = vkMapMemory(dev, arena->memory, 0, VK_WHOLE_SIZE, 0, &arena->mapped);
 	if (res != VK_SUCCESS) {
-		wlr_vk_error("vkMapMemory", res);
+		vk_renderer_handle_result(vk_renderer, "vkMapMemory", res);
 		goto error;
 	}
 
@@ -640,7 +654,7 @@ static struct vk_gradient_arena *create_gradient_arena(struct vk_render_pass *pa
 	};
 	res = vkCreateDescriptorPool(dev, &pool_info, NULL, &arena->descriptor_pool);
 	if (res != VK_SUCCESS) {
-		wlr_vk_error("vkCreateDescriptorPool", res);
+		vk_renderer_handle_result(vk_renderer, "vkCreateDescriptorPool", res);
 		goto error;
 	}
 
@@ -652,7 +666,7 @@ static struct vk_gradient_arena *create_gradient_arena(struct vk_render_pass *pa
 	};
 	res = vkAllocateDescriptorSets(dev, &set_info, &arena->descriptor_set);
 	if (res != VK_SUCCESS) {
-		wlr_vk_error("vkAllocateDescriptorSets", res);
+		vk_renderer_handle_result(vk_renderer, "vkAllocateDescriptorSets", res);
 		goto error;
 	}
 
@@ -842,6 +856,13 @@ static void vk_render_pass_add_rounded_rect_grad(struct fx_render_pass *fx_pass,
 
 static void vk_render_pass_add_box_shadow(struct fx_render_pass *fx_pass,
 		const struct fx_render_box_shadow_options *options) {
+	// A lost device rejects everything, so record nothing and let the
+	// compositor's listener take over. vk_render_pass_init() is what actually
+	// reports the loss; the pass it returns is the first thing to notice.
+	if (vk_renderer_device_lost(vk_get_render_pass(fx_pass)->vk_renderer)) {
+		return;
+	}
+
 	TRACY_GPU_ZONE_START(fx_pass->fx_renderer);
 
 	struct vk_render_pass *pass = vk_get_render_pass(fx_pass);
@@ -1032,6 +1053,13 @@ static void render_blur_step(struct vk_render_pass *pass,
 
 static void vk_render_pass_add_blur(struct fx_render_pass *fx_pass,
 		const struct fx_render_blur_pass_options *fx_options) {
+	// A lost device rejects everything, so record nothing and let the
+	// compositor's listener take over. vk_render_pass_init() is what actually
+	// reports the loss; the pass it returns is the first thing to notice.
+	if (vk_renderer_device_lost(vk_get_render_pass(fx_pass)->vk_renderer)) {
+		return;
+	}
+
 	TRACY_GPU_ZONE_START(fx_pass->fx_renderer);
 
 	struct vk_render_pass *pass = vk_get_render_pass(fx_pass);
@@ -1215,6 +1243,13 @@ static void vk_render_pass_add_blur(struct fx_render_pass *fx_pass,
 
 static bool vk_render_pass_add_optimized_blur(struct fx_render_pass *fx_pass,
 		const struct fx_render_blur_pass_options *fx_options) {
+	// A lost device rejects everything, so record nothing and let the
+	// compositor's listener take over. vk_render_pass_init() is what actually
+	// reports the loss; the pass it returns is the first thing to notice.
+	if (vk_renderer_device_lost(vk_get_render_pass(fx_pass)->vk_renderer)) {
+		return false;
+	}
+
 	TRACY_GPU_ZONE_START(fx_pass->fx_renderer);
 
 	// TODO: optimized blur
@@ -1457,6 +1492,17 @@ struct fx_render_pass *vk_render_pass_init(struct fx_renderer *fx_renderer,
 		wlr_log(WLR_DEBUG, "Could not create vk_render_pass, NULL parameters");
 		return NULL;
 	}
+	struct vk_renderer *vk_renderer = vk_get_renderer(fx_renderer);
+
+	// A lost device is reported here rather than from the call that noticed it:
+	// listeners are free to destroy the renderer, and at this point nothing of
+	// ours is live, so the loss cannot leave us holding freed memory. The report
+	// is consumed so that later frames, which still find the device lost, do not
+	// make the compositor tear down and recreate the renderer over and over.
+	if (vk_renderer_take_device_lost(vk_renderer)) {
+		wl_signal_emit_mutable(&fx_renderer->wlr_renderer->events.lost, NULL);
+		return NULL;
+	}
 
 	struct vk_render_pass *pass = calloc(1, sizeof(*pass));
 	if (pass == NULL) {
@@ -1466,7 +1512,6 @@ struct fx_render_pass *vk_render_pass_init(struct fx_renderer *fx_renderer,
 
 	fx_render_pass_init(&pass->fx_render_pass, &render_pass_impl, fx_renderer, render_pass);
 
-	struct vk_renderer *vk_renderer = vk_get_renderer(fx_renderer);
 	pass->vk_renderer = vk_renderer;
 
 	pass->gradient_state = calloc(1, sizeof(*pass->gradient_state));

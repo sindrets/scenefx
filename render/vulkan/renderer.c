@@ -142,6 +142,44 @@ void vk_renderer_set_tracy_command_buffer(struct vk_renderer *renderer,
 	renderer->tracy_command_buffer = cb;
 }
 
+bool vk_renderer_device_lost(struct vk_renderer *renderer) {
+	return renderer->device_lost;
+}
+
+bool vk_renderer_take_device_lost(struct vk_renderer *renderer) {
+	if (!renderer->device_lost || renderer->device_lost_reported) {
+		return false;
+	}
+	renderer->device_lost_reported = true;
+	return true;
+}
+
+bool vk_renderer_handle_result(struct vk_renderer *renderer,
+		const char *what, VkResult res) {
+	if (res == VK_SUCCESS) {
+		return false;
+	}
+
+	// Not wlr_vk_error(): it pastes its format argument into a literal, so it
+	// only accepts a constant format string.
+	wlr_log(WLR_ERROR, "%s: %s (%d)", what, vulkan_strerror(res), (int)res);
+
+	if (res != VK_ERROR_DEVICE_LOST || renderer->device_lost) {
+		// Not a loss, or one already reported. Repeating it would make the
+		// compositor tear down and recreate the renderer again for a device
+		// that is already gone.
+		return renderer->device_lost;
+	}
+
+	renderer->device_lost = true;
+
+	// No wl_signal_emit_mutable(&renderer->fx_renderer.wlr_renderer->events.lost, NULL)
+	// here: a listener is free to destroy the renderer on the spot, which would
+	// free this object mid-call. The loss is reported from vk_render_pass_init()
+	// instead, where nothing of ours is live.
+	return true;
+}
+
 static void renderer_destroy(struct fx_renderer *fx_renderer) {
 	struct vk_renderer *vk_renderer = vk_get_renderer(fx_renderer);
 
