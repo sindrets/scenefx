@@ -54,20 +54,20 @@ the usual `WLR_RENDERER` selection applies: `gles2` (the default) or `vulkan`.
 Both FX renderers are feature-complete for the scene API. The Vulkan one is
 newer, so the differences below are deliberate or still open:
 
-| Feature | GLES2 | Vulkan |
-| --- | --- | --- |
-| Rects, textures, clipping | yes | yes |
-| Rounded corners | yes | yes |
-| Linear and radial gradients | yes | yes |
-| Box shadows | yes | yes |
-| Blur (dual-Kawase) | yes | yes |
-| Blur transparency mask | stencil | sampled mask texture |
-| Blur padding save/restore | yes | yes |
-| Optimized blur nodes | yes | yes |
-| Explicit sync (`wait_timeline`) | yes | yes |
-| Device-lost propagation | yes | yes |
-| Tracy GPU zones | yes | yes |
-| `wlr_render_timer` | yes | **not yet** |
+| Feature                         | GLES2   | Vulkan               |
+| ------------------------------- | ------- | -------------------- |
+| Rects, textures, clipping       | yes     | yes                  |
+| Rounded corners                 | yes     | yes                  |
+| Linear and radial gradients     | yes     | yes                  |
+| Box shadows                     | yes     | yes                  |
+| Blur (dual-Kawase)              | yes     | yes                  |
+| Blur transparency mask          | stencil | sampled mask texture |
+| Blur padding save/restore       | yes     | yes                  |
+| Optimized blur nodes            | yes     | yes                  |
+| Explicit sync (`wait_timeline`) | yes     | yes                  |
+| Device-lost propagation         | yes     | yes                  |
+| Tracy GPU zones                 | yes     | yes                  |
+| `wlr_render_timer`              | yes     | **not yet**          |
 
 Two things are worth knowing before switching a compositor over:
 
@@ -77,12 +77,14 @@ Two things are worth knowing before switching a compositor over:
   output is therefore *correct* rather than identical - high-contrast content
   differs by roughly 8-11% while solid areas match exactly. Sharp (unblurred)
   content is pixel-identical between the two renderers.
-* **Blur nodes that request the optimized path do not reuse the cache yet.**
-  `wlr_scene_optimized_blur_create()` nodes work: the blur is rendered once into
-  a renderer-owned cache and composited from there. But nodes marked with
-  `wlr_scene_blur_set_should_only_blur_bottom_layer()` still re-blur every frame
-  rather than sampling that cache, so they cost more than on GLES2. This is a
-  performance gap, not a visual one.
+* **Optimized blur falls back to a live blur at reduced strength.**
+  `wlr_scene_optimized_blur_create()` nodes fill a per-output cache without
+  drawing anything, and nodes marked with
+  `wlr_scene_blur_set_should_only_blur_bottom_layer()` sample that cache instead
+  of blurring again, matching GLES2. The one difference is a blur node with a
+  strength below 1.0: GLES2 re-blurs an unblurred copy kept alongside the cache,
+  which Vulkan does not maintain, so it blurs the live frame instead. The result
+  is visually equivalent, just not identical.
 
 `wlr_render_timer` requires wlroots work first: its Vulkan renderer has no
 `render_timer_create` at all, so the call returns `NULL` regardless of SceneFX.
