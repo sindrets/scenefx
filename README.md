@@ -5,8 +5,9 @@
 > parity with the GLES2 renderer (with some differences. See details under
 > [_Renderer Support_](#renderer-support)).
 >
-> The Vulkan renderer needs a wlroots with the renderer changes described in
-> [_Usage_](#usage); the GLES2 one builds against upstream wlroots.
+> The Vulkan renderer needs the wlroots fork at
+> <https://github.com/sindrets/wlroots-vkfx>; the GLES2 one builds against
+> upstream wlroots. See [_Usage_](#usage).
 >
 > This builds on top of the work done in
 > <https://github.com/wlrfx/scenefx/tree/vulkan>.
@@ -65,12 +66,14 @@ providing your wlr_scene and wlr_backend structs and replace all
 SceneFX picks an FX renderer matching whatever `wlr_renderer` it is given, so
 the usual `WLR_RENDERER` selection applies: `gles2` (the default) or `vulkan`.
 
-The Vulkan renderer additionally requires a wlroots fork: upstream's Vulkan
-renderer has no way to let a consumer sample the frame drawn so far, which blur
-needs. It is picked up through the `wlroots-vkfx-<version>` pkg-config name, so
-build the fork, install it (or point `PKG_CONFIG_PATH` at its
-`build/meson-uninstalled` directory) and it is used automatically. The GLES2
-renderer is unaffected and builds against upstream wlroots.
+The Vulkan renderer additionally requires
+<https://github.com/sindrets/wlroots-vkfx>: upstream's Vulkan renderer has no
+way to let a consumer sample the frame drawn so far, which blur needs. That
+fork installs under the `wlroots-vkfx-<version>` pkg-config name, which is the
+name this project looks for, so build and install it first (or point
+`PKG_CONFIG_PATH` at its `build/meson-uninstalled` directory) and it is used
+automatically. The GLES2 renderer is unaffected and builds against upstream
+wlroots.
 
 ## Renderer Support
 
