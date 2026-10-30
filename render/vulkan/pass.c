@@ -14,6 +14,7 @@
 #include <stdio.h>
 
 #include "render/fx_renderer.h"
+#include "render/tracy.h"
 #include "render/vulkan/shaders.h"
 #include "render/vulkan/vulkan.h"
 #include "scenefx/render/pass.h"
@@ -345,6 +346,11 @@ static void vk_render_pass_apply_saved_blur_region(struct fx_render_pass *fx_pas
 static void vk_render_pass_destroy(struct fx_render_pass *fx_pass) {
 	struct vk_render_pass *vk_render_pass = vk_get_render_pass(fx_pass);
 	struct vk_renderer *vk_renderer = vk_render_pass->vk_renderer;
+	// The pass is torn down before wlr_render_pass_submit() ends the command
+	// buffer, so stop recording GPU timestamps against it now.
+	if (vk_renderer->tracy_command_buffer == vk_render_pass->command_buffer) {
+		vk_renderer_set_tracy_command_buffer(vk_renderer, VK_NULL_HANDLE);
+	}
 
 	gradient_state_unref(vk_renderer, vk_render_pass->gradient_state);
 	free(vk_render_pass);
@@ -352,6 +358,8 @@ static void vk_render_pass_destroy(struct fx_render_pass *fx_pass) {
 
 static void vk_render_pass_add_rect(struct fx_render_pass *fx_pass,
 		const struct fx_render_rect_options *fx_options) {
+	TRACY_GPU_ZONE_START(fx_pass->fx_renderer);
+
 	const struct wlr_render_rect_options *options = &fx_options->base;
 	struct vk_render_pass *pass = vk_get_render_pass(fx_pass);
 	struct vk_renderer *vk_renderer = pass->vk_renderer;
@@ -394,6 +402,7 @@ static void vk_render_pass_add_rect(struct fx_render_pass *fx_pass,
 		pass->render_setup->vk_pipelines.quad, effects);
 	if (pipeline == NULL) {
 		pixman_region32_fini(&clip_region);
+		TRACY_GPU_ZONE_END;
 		return;
 	}
 
@@ -421,10 +430,13 @@ static void vk_render_pass_add_rect(struct fx_render_pass *fx_pass,
 	draw_clip_region(pass, &clip_region, &box);
 
 	pixman_region32_fini(&clip_region);
+	TRACY_GPU_ZONE_END;
 }
 
 static void vk_render_pass_add_rounded_rect(struct fx_render_pass *fx_pass,
 		const struct fx_render_rounded_rect_options *fx_options) {
+	TRACY_GPU_ZONE_START(fx_pass->fx_renderer);
+
 	const struct wlr_render_rect_options *options = &fx_options->base;
 	struct vk_render_pass *pass = vk_get_render_pass(fx_pass);
 	struct vk_renderer *vk_renderer = pass->vk_renderer;
@@ -465,6 +477,7 @@ static void vk_render_pass_add_rounded_rect(struct fx_render_pass *fx_pass,
 		pass->render_setup->vk_pipelines.quad, effects);
 	if (pipeline == NULL) {
 		pixman_region32_fini(&clip_region);
+		TRACY_GPU_ZONE_END;
 		return;
 	}
 
@@ -492,6 +505,7 @@ static void vk_render_pass_add_rounded_rect(struct fx_render_pass *fx_pass,
 	draw_clip_region(pass, &clip_region, &box);
 
 	pixman_region32_fini(&clip_region);
+	TRACY_GPU_ZONE_END;
 }
 
 // Min alignment required for dynamic uniform buffer offsets. 256 is the
@@ -828,6 +842,8 @@ static void vk_render_pass_add_rounded_rect_grad(struct fx_render_pass *fx_pass,
 
 static void vk_render_pass_add_box_shadow(struct fx_render_pass *fx_pass,
 		const struct fx_render_box_shadow_options *options) {
+	TRACY_GPU_ZONE_START(fx_pass->fx_renderer);
+
 	struct vk_render_pass *pass = vk_get_render_pass(fx_pass);
 	struct vk_renderer *vk_renderer = pass->vk_renderer;
 	VkCommandBuffer cb = pass->command_buffer;
@@ -853,6 +869,7 @@ static void vk_render_pass_add_box_shadow(struct fx_render_pass *fx_pass,
 				},
 				.clipped_region = options->clipped_region,
 			});
+		TRACY_GPU_ZONE_END;
 		return;
 	}
 
@@ -872,6 +889,7 @@ static void vk_render_pass_add_box_shadow(struct fx_render_pass *fx_pass,
 		pass->render_setup->vk_pipelines.box_shadow, effects);
 	if (pipeline == NULL) {
 		pixman_region32_fini(&clip_region);
+		TRACY_GPU_ZONE_END;
 		return;
 	}
 
@@ -926,6 +944,7 @@ static void vk_render_pass_add_box_shadow(struct fx_render_pass *fx_pass,
 	draw_clip_region(pass, &clip_region, &box);
 
 	pixman_region32_fini(&clip_region);
+	TRACY_GPU_ZONE_END;
 }
 
 // Records one dual-Kawase step: samples src_ds into dst, over the scissor rects
@@ -1013,12 +1032,15 @@ static void render_blur_step(struct vk_render_pass *pass,
 
 static void vk_render_pass_add_blur(struct fx_render_pass *fx_pass,
 		const struct fx_render_blur_pass_options *fx_options) {
+	TRACY_GPU_ZONE_START(fx_pass->fx_renderer);
+
 	struct vk_render_pass *pass = vk_get_render_pass(fx_pass);
 	struct vk_renderer *renderer = pass->vk_renderer;
 
 	struct blur_data blur_data =
 		blur_data_apply_strength(fx_options->blur_data, fx_options->blur_strength);
 	if (fx_options->blur_strength <= 0 || !is_scene_blur_enabled(&blur_data)) {
+		TRACY_GPU_ZONE_END;
 		return;
 	}
 
@@ -1031,22 +1053,26 @@ static void vk_render_pass_add_blur(struct fx_render_pass *fx_pass,
 	VkImageView blend_view =
 		wlr_vk_render_pass_get_blend_image_view(fx_pass->render_pass);
 	if (blend_view == VK_NULL_HANDLE) {
+		TRACY_GPU_ZONE_END;
 		return;
 	}
 	// Effect framebuffers must be built against the scene render pass so the
 	// blur pipelines stay compatible with them.
 	VkRenderPass scene_pass = wlr_vk_render_pass_get_render_pass(fx_pass->render_pass);
 	if (!vk_effect_images_ensure(renderer, scene_pass, buffer->width, buffer->height)) {
+		TRACY_GPU_ZONE_END;
 		return;
 	}
 	VkDescriptorSet blend_ds = vk_get_blend_ds(renderer, blend_view);
 	if (blend_ds == VK_NULL_HANDLE) {
+		TRACY_GPU_ZONE_END;
 		return;
 	}
 
 	struct vk_pipelines *pipelines = &pass->render_setup->vk_pipelines;
 	if (pipelines->blur1 == NULL || pipelines->blur2 == NULL ||
 			pipelines->blur_effects == NULL) {
+		TRACY_GPU_ZONE_END;
 		return;
 	}
 
@@ -1066,11 +1092,13 @@ static void vk_render_pass_add_blur(struct fx_render_pass *fx_pass,
 
 	if (!pixman_region32_not_empty(&damage)) {
 		pixman_region32_fini(&damage);
+		TRACY_GPU_ZONE_END;
 		return;
 	}
 
 	if (!wlr_vk_render_pass_suspend(fx_pass->render_pass)) {
 		pixman_region32_fini(&damage);
+		TRACY_GPU_ZONE_END;
 		return;
 	}
 
@@ -1107,6 +1135,7 @@ static void vk_render_pass_add_blur(struct fx_render_pass *fx_pass,
 
 	if (!wlr_vk_render_pass_resume(fx_pass->render_pass)) {
 		pixman_region32_fini(&damage);
+		TRACY_GPU_ZONE_END;
 		return;
 	}
 
@@ -1181,12 +1210,17 @@ static void vk_render_pass_add_blur(struct fx_render_pass *fx_pass,
 
 	pixman_region32_fini(&composite_clip);
 	pixman_region32_fini(&damage);
+	TRACY_GPU_ZONE_END;
 }
 
 static bool vk_render_pass_add_optimized_blur(struct fx_render_pass *fx_pass,
 		const struct fx_render_blur_pass_options *fx_options) {
+	TRACY_GPU_ZONE_START(fx_pass->fx_renderer);
+
 	// TODO: optimized blur
+	TRACY_GPU_ZONE_END;
 	return false;
+	TRACY_GPU_ZONE_END;
 }
 
 ///
@@ -1451,6 +1485,7 @@ struct fx_render_pass *vk_render_pass_init(struct fx_renderer *fx_renderer,
 	}
 
 	pass->command_buffer = wlr_vk_render_pass_get_command_buffer(render_pass);
+	vk_renderer_set_tracy_command_buffer(vk_renderer, pass->command_buffer);
 	pass->render_setup = vk_render_setup_find_or_create(pass->vk_renderer, render_pass);
 	assert(pass->render_setup);
 

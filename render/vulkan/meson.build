@@ -21,6 +21,7 @@ scenefx_files += files(
 	'pipeline.c',
 	'renderer.c',
 	'shaders.c',
+	'tracy.c',
 	'vulkan.c',
 )
 

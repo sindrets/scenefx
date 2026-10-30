@@ -137,8 +137,15 @@ static struct fx_offscreen_buffers *offscreen_buffers_allocate(
 	return &vk_offscreen_buffers->fx_offscreen_buffers;
 }
 
+void vk_renderer_set_tracy_command_buffer(struct vk_renderer *renderer,
+		VkCommandBuffer cb) {
+	renderer->tracy_command_buffer = cb;
+}
+
 static void renderer_destroy(struct fx_renderer *fx_renderer) {
 	struct vk_renderer *vk_renderer = vk_get_renderer(fx_renderer);
+
+	TRACY_GPU_CONTEXT_DESTROY(fx_renderer);
 
 	struct vk_buffer *buffer, *buffer_tmp;
 	wl_list_for_each_safe(buffer, buffer_tmp, &vk_renderer->buffers, link) {
@@ -154,6 +161,10 @@ static void renderer_destroy(struct fx_renderer *fx_renderer) {
 
 	free(vk_renderer);
 }
+
+#ifdef TRACY_ENABLE
+extern const struct fx_renderer_tracy_impl vk_renderer_tracy_impl;
+#endif
 
 static const struct fx_renderer_impl renderer_impl = {
 	.offscreen_buffers_allocate = offscreen_buffers_allocate,

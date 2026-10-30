@@ -196,7 +196,24 @@ struct vk_renderer {
 	// when the underlying image view changes.
 	VkDescriptorSet blend_ds;
 	VkImageView blend_ds_view;
+
+	// Tracy GPU profiling state. Timestamps are written into the command buffer
+	// that is currently being recorded, so the renderer tracks it as passes
+	// begin and end; VK_NULL_HANDLE means no pass is recording and zones are
+	// dropped rather than recorded against a stale buffer.
+	VkQueryPool tracy_query_pool;
+	VkCommandPool tracy_command_pool;
+	VkCommandBuffer tracy_command_buffer;
+	// vkResetQueryPool entrypoint, resolved at runtime; NULL when unavailable.
+	PFN_vkResetQueryPool tracy_reset_query_pool;
 };
+
+/**
+ * Records the command buffer passes are currently recording into, for Tracy
+ * GPU timestamp queries. Passing VK_NULL_HANDLE marks the end of a pass.
+ */
+void vk_renderer_set_tracy_command_buffer(struct vk_renderer *renderer,
+		VkCommandBuffer cb);
 
 struct fx_renderer *vk_renderer_create(struct wlr_renderer *wlr_renderer);
 

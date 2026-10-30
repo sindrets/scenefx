@@ -16,6 +16,9 @@ struct tracy_gpu_zone_context;
 
 struct fx_renderer;
 
+// Tracy's protocol carries the query id as a uint16_t (see
+// ___tracy_gpu_time_data.queryId), so the ring must not exceed 65536 entries
+// and the Vulkan backend's query pool must be at most that large.
 #define QUERY_QUEUE_LEN (64 * 1024)
 struct tracy_data {
 	struct fx_renderer *fx_renderer;
