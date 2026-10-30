@@ -1,5 +1,21 @@
 # scenefx
 
+> [!NOTE]
+> **What is this fork?**: This fork aims to provide a Vulkan renderer with full
+> parity with the GLES2 renderer (with some differences. See details under
+> [_Renderer Support_](#renderer-support)).
+>
+> The Vulkan renderer needs a wlroots with the renderer changes described in
+> [_Usage_](#usage); the GLES2 one builds against upstream wlroots.
+>
+> This builds on top of the work done in
+> <https://github.com/wlrfx/scenefx/tree/vulkan>.
+>
+> And adapts work done in
+> <https://github.com/wlrfx/scenefx/pull/204> and its companion wlroots branch
+> <https://github.com/spoloxs/wlroots-vkfx/tree/vulkan-effects>, itself based on
+> <https://gitlab.freedesktop.org/ammen99/wlroots/-/tree/vulkan-effects>.
+
 wlroots is the de-facto library for building wayland compositors, and its scene api has vastly simplified compositor development. However, for developers wanting modern aesthetic flair, the Scene API forces the use of the standard wlr_renderer, which is intentionally kept minimal and simple. SceneFX bridges this gap by serving as a drop-in replacement for the Scene API. It swaps out the default renderer for our custom FX renderer, allowing compositors to easily render eye-candy effects like blur, shadows, and rounded corners while maintaining the simplicity of the upstream Scene API.
 
 ## Compositors Using SceneFX
@@ -49,7 +65,14 @@ providing your wlr_scene and wlr_backend structs and replace all
 SceneFX picks an FX renderer matching whatever `wlr_renderer` it is given, so
 the usual `WLR_RENDERER` selection applies: `gles2` (the default) or `vulkan`.
 
-## Renderer support
+The Vulkan renderer additionally requires a wlroots fork: upstream's Vulkan
+renderer has no way to let a consumer sample the frame drawn so far, which blur
+needs. It is picked up through the `wlroots-vkfx-<version>` pkg-config name, so
+build the fork, install it (or point `PKG_CONFIG_PATH` at its
+`build/meson-uninstalled` directory) and it is used automatically. The GLES2
+renderer is unaffected and builds against upstream wlroots.
+
+## Renderer Support
 
 Both FX renderers are feature-complete for the scene API. The Vulkan one is
 newer, so the differences below are deliberate or still open:
