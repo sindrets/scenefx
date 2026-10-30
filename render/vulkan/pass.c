@@ -1134,6 +1134,12 @@ static void vk_render_pass_add_blur(struct fx_render_pass *fx_pass,
 		.saturation = blur_data.saturation,
 		.noise = blur_data.noise,
 	};
+	// Round the composite to the node's shape. The blur node's corners live on
+	// tex_options (the top-level fx_render_blur_pass_options.corners is not set
+	// by the scene), and its box is the tex_options destination box. Without
+	// this a rounded blur node renders with square corners.
+	push_rounding_data(&effects_pcr_data.corner_rounding,
+		&fx_options->tex_options.base.dst_box, &fx_options->tex_options.corners);
 
 	VkPipelineLayout layout = pipelines->blur_effects->pipeline_layout;
 	VkDescriptorSet result_ds = renderer->effect_images[result_index].ds;

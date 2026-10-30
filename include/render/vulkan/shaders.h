@@ -176,12 +176,14 @@ struct vk_frag_blur_pcr_data {
 	float radius;
 };
 
-// Matches blur_effects.frag, which applies brightness/contrast/saturation/noise.
+// Matches blur_effects.frag, which applies brightness/contrast/saturation/noise
+// and then masks the result to the node's rounded corners.
 struct vk_frag_blur_effects_pcr_data {
 	float brightness;
 	float contrast;
 	float saturation;
 	float noise;
+	struct vk_shader_rounding_data corner_rounding;
 };
 
 struct vk_pipeline_blur {

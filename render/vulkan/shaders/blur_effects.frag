@@ -1,7 +1,13 @@
 #version 450
+#extension GL_ARB_shading_language_include : require
 
 // Brightness/contrast/saturation/noise applied after the blur chain.
 // Port of the GLES2 blur_effects.frag.
+//
+// This is also the composite that paints the blurred result into the scene, so
+// it carries the corner rounding: GLES2 masks the blur with the window shape by
+// drawing the blurred buffer through its rounded texture path, and Vulkan has
+// to do the same or a rounded blur node renders with square corners.
 
 layout(location = 0) in vec2 uv;
 layout(location = 0) out vec4 out_color;
@@ -13,7 +19,17 @@ layout(push_constant) uniform UBO {
 	float contrast;
 	float saturation;
 	float noise;
+
+	// Appended after the blur params so the fields above keep their offsets.
+	vec2 size;
+	vec2 position;
+	float radius_top_left;
+	float radius_top_right;
+	float radius_bottom_left;
+	float radius_bottom_right;
 } data;
+
+#include "corner_alpha.glsl"
 
 mat4 brightness_matrix() {
 	float b = data.brightness - 1.0;
@@ -57,5 +73,17 @@ void main() {
 	// Do *not* transpose the combined matrix when multiplying
 	color = brightness_matrix() * contrast_matrix() * saturation_matrix() * color;
 	color.xyz += noise_amount(uv);
+
+	// Rounded corners, matching how the GLES2 path masks the blurred buffer.
+	color *= corner_alpha(
+		data.size - 0.5,
+		data.position + 0.25,
+		false,
+		data.radius_top_left,
+		data.radius_top_right,
+		data.radius_bottom_left,
+		data.radius_bottom_right
+	);
+
 	out_color = color;
 }
