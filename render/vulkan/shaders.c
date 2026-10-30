@@ -803,17 +803,29 @@ VkDescriptorSetLayout vk_get_tex_ds_layout(struct vk_renderer *renderer) {
 		return VK_NULL_HANDLE;
 	}
 
-	VkDescriptorSetLayoutBinding binding = {
-		.binding = 0,
-		.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-		.descriptorCount = 1,
-		.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-		.pImmutableSamplers = &renderer->shader_info.tex_sampler,
+	// Binding 1 is blur_effects' transparency mask. Every blur shader shares this
+	// layout, so blur1/blur2 simply leave it unread; Vulkan allows a binding no
+	// shader touches to stay unwritten.
+	VkDescriptorSetLayoutBinding bindings[] = {
+		{
+			.binding = 0,
+			.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+			.descriptorCount = 1,
+			.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+			.pImmutableSamplers = &renderer->shader_info.tex_sampler,
+		},
+		{
+			.binding = 1,
+			.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+			.descriptorCount = 1,
+			.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+			.pImmutableSamplers = &renderer->shader_info.tex_sampler,
+		},
 	};
 	VkDescriptorSetLayoutCreateInfo info = {
 		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-		.bindingCount = 1,
-		.pBindings = &binding,
+		.bindingCount = sizeof(bindings) / sizeof(bindings[0]),
+		.pBindings = bindings,
 	};
 
 	res = vkCreateDescriptorSetLayout(renderer->device, &info, NULL,
@@ -825,9 +837,10 @@ VkDescriptorSetLayout vk_get_tex_ds_layout(struct vk_renderer *renderer) {
 		return VK_NULL_HANDLE;
 	}
 
+	// Two combined-image-sampler bindings per set (tex and mask).
 	VkDescriptorPoolSize pool_size = {
 		.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-		.descriptorCount = VK_TEX_DS_POOL_SIZE,
+		.descriptorCount = VK_TEX_DS_POOL_SIZE * 2,
 	};
 	VkDescriptorPoolCreateInfo pool_info = {
 		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -886,6 +899,36 @@ VkDescriptorSet vk_tex_ds_create(struct vk_renderer *renderer, VkImageView view)
 	vkUpdateDescriptorSets(renderer->device, 1, &write, 0, NULL);
 
 	return ds;
+}
+
+bool vk_tex_ds_set_mask(struct vk_renderer *renderer, VkDescriptorSet ds,
+		VkImageView view, VkImageLayout layout) {
+	if (ds == VK_NULL_HANDLE) {
+		return false;
+	}
+	if (view == VK_NULL_HANDLE) {
+		if (!vk_dummy_mask_ensure(renderer)) {
+			return false;
+		}
+		view = renderer->dummy_mask.view;
+		layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+	}
+
+	VkDescriptorImageInfo image_info = {
+		// sampler comes from the layout's immutable sampler
+		.imageView = view,
+		.imageLayout = layout,
+	};
+	VkWriteDescriptorSet write = {
+		.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		.dstSet = ds,
+		.dstBinding = 1,
+		.descriptorCount = 1,
+		.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+		.pImageInfo = &image_info,
+	};
+	vkUpdateDescriptorSets(renderer->device, 1, &write, 0, NULL);
+	return true;
 }
 
 void vk_tex_ds_destroy(struct vk_renderer *renderer, VkDescriptorSet ds) {

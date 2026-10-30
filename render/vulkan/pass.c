@@ -1124,6 +1124,50 @@ static void vk_render_pass_add_blur(struct fx_render_pass *fx_pass,
 		return;
 	}
 
+	// GLES2 masks the blur to the window's non-transparent pixels with a stencil.
+	// This render pass has no stencil attachment, so the mask is sampled by
+	// blur_effects instead: fetch the image now, while a failure can still bail
+	// out before the pass is suspended.
+	VkImageView mask_view = VK_NULL_HANDLE;
+	VkImageLayout mask_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+	bool has_mask = false;
+	if (fx_options->ignore_transparent &&
+			fx_options->tex_options.base.texture != NULL) {
+		struct wlr_texture *mask_tex = fx_options->tex_options.base.texture;
+
+		// Register the client's explicit sync point even though wlroots' own
+		// descriptor set cannot be used: this call is the only way the pass
+		// learns it must wait before this image is read.
+		enum wlr_color_transfer_function mask_tf =
+			fx_options->tex_options.base.transfer_function;
+		if (mask_tf == 0) {
+			mask_tf = WLR_COLOR_TRANSFER_FUNCTION_GAMMA22;
+		}
+		VkDescriptorSet sync_ds =
+			wlr_vk_render_pass_get_texture_ds(pass->fx_render_pass.render_pass,
+				mask_tex, fx_options->tex_options.base.filter_mode, mask_tf,
+				fx_options->tex_options.base.wait_timeline,
+				fx_options->tex_options.base.wait_point);
+		if (sync_ds == VK_NULL_HANDLE) {
+			wlr_log(WLR_ERROR, "Failed to register the blur transparency mask texture");
+			pixman_region32_fini(&damage);
+			TRACY_GPU_ZONE_END;
+			return;
+		}
+
+		struct wlr_vk_image_attribs attribs;
+		wlr_vk_texture_get_image_attribs(mask_tex, &attribs);
+		mask_view = vk_mask_view_get(renderer, attribs.image, attribs.format,
+			&mask_layout);
+		if (mask_view == VK_NULL_HANDLE) {
+			wlr_log(WLR_ERROR, "Failed to create a view of the blur transparency mask");
+			pixman_region32_fini(&damage);
+			TRACY_GPU_ZONE_END;
+			return;
+		}
+		has_mask = true;
+	}
+
 	if (!wlr_vk_render_pass_suspend(fx_pass->render_pass)) {
 		pixman_region32_fini(&damage);
 		TRACY_GPU_ZONE_END;
@@ -1198,17 +1242,56 @@ static void vk_render_pass_add_blur(struct fx_render_pass *fx_pass,
 	push_rounding_data(&effects_pcr_data.corner_rounding,
 		&fx_options->tex_options.base.dst_box, &fx_options->tex_options.corners);
 
+	// Map the shader's uv onto the mask texture.
+	//
+	// blur_effects' uv spans the whole output (the composite quad is sized by
+	// the projection matrix, not by the blur node), while the mask only covers
+	// the node's destination box. So the mapping is the affine composition of
+	// "uv in the output" -> "position in the dst box" -> "texcoord in the mask":
+	//
+	//   mask_uv = src_offset - dst_offset/dst_size * src_size/output
+	//             + uv * (output/dst_size * src_size)
+	//
+	// Both halves are pre-multiplied here so the shader is a single mad.
+	effects_pcr_data.has_mask = has_mask ? 1.0f : 0.0f;
+	effects_pcr_data.ignore_alpha_threshold = fx_options->ignore_alpha_threshold;
+	if (has_mask) {
+		struct wlr_texture *mask_tex = fx_options->tex_options.base.texture;
+		struct wlr_fbox src_fbox;
+		wlr_render_texture_options_get_src_box(
+			&fx_options->tex_options.base, &src_fbox);
+		const struct wlr_box *dst_box = &fx_options->tex_options.base.dst_box;
+		// A zero dst box means "the whole texture", which is also what the
+		// mask's geometry would have been.
+		struct wlr_box dst = *dst_box;
+		if (wlr_box_empty(&dst)) {
+			dst = (struct wlr_box){ 0, 0, buffer->width, buffer->height };
+		}
+
+		float src_size[2] = {
+			src_fbox.width / mask_tex->width,
+			src_fbox.height / mask_tex->height,
+		};
+		float src_off[2] = {
+			src_fbox.x / mask_tex->width,
+			src_fbox.y / mask_tex->height,
+		};
+		for (int i = 0; i < 2; i++) {
+			float out_size = i == 0 ? buffer->width : buffer->height;
+			float dst_off = i == 0 ? dst.x : dst.y;
+			float dst_size = i == 0 ? dst.width : dst.height;
+			if (dst_size <= 0) {
+				dst_size = out_size;
+			}
+			effects_pcr_data.mask_uv_size[i] =
+				(out_size / dst_size) * src_size[i];
+			effects_pcr_data.mask_uv[i] = src_off[i]
+				- (dst_off / dst_size) * src_size[i];
+		}
+}
+
 	VkPipelineLayout layout = pipelines->blur_effects->pipeline_layout;
 	VkDescriptorSet result_ds = renderer->effect_images[result_index].ds;
-	vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
-		pipelines->blur_effects->pipeline.pipeline);
-	vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout,
-		0, 1, &result_ds, 0, NULL);
-	vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_VERTEX_BIT,
-		0, sizeof(vert_pcr_data), &vert_pcr_data);
-	vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_FRAGMENT_BIT,
-		sizeof(vert_pcr_data), sizeof(effects_pcr_data), &effects_pcr_data);
-
 	// Composite only where the caller asked for blur. `damage` is deliberately
 	// wider (expanded so edge taps have neighbours) and must NOT be used here:
 	// painting the blurred image across the expanded area covers unrelated
@@ -1222,6 +1305,29 @@ static void vk_render_pass_add_blur(struct fx_render_pass *fx_pass,
 		pixman_region32_union_rect(&composite_clip, &composite_clip, 0, 0,
 			buffer->width, buffer->height);
 	}
+
+	// The effect image's own descriptor set only ever has binding 0 written, so
+	// the mask gets written per frame. When there is no mask, the dummy opaque
+	// image goes in, keeping the shader's fetch well defined.
+	if (!vk_tex_ds_set_mask(renderer, result_ds,
+			has_mask ? mask_view : VK_NULL_HANDLE, mask_layout)) {
+		// Cannot happen for a live device; bail rather than draw unmasked.
+		wlr_log(WLR_ERROR, "Failed to bind the blur transparency mask");
+		wlr_vk_render_pass_reset_pipeline(fx_pass->render_pass);
+		pass->bound_pipeline = VK_NULL_HANDLE;
+		pixman_region32_fini(&composite_clip);
+		pixman_region32_fini(&damage);
+		TRACY_GPU_ZONE_END;
+		return;
+	}
+	vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+		pipelines->blur_effects->pipeline.pipeline);
+	vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout,
+		0, 1, &result_ds, 0, NULL);
+	vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_VERTEX_BIT,
+		0, sizeof(vert_pcr_data), &vert_pcr_data);
+	vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_FRAGMENT_BIT,
+		sizeof(vert_pcr_data), sizeof(effects_pcr_data), &effects_pcr_data);
 
 	int rects_len;
 	const pixman_box32_t *rects =

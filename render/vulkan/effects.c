@@ -248,6 +248,148 @@ void vk_effect_image_prepare_target(VkCommandBuffer cb, struct vk_effect_image *
 	img->layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 }
 
+void vk_mask_view_finish(struct vk_renderer *renderer) {
+	if (renderer->mask_view.view == VK_NULL_HANDLE) {
+		return;
+	}
+	// Same in-use hazard as effect_image_finish(): the previous frame's command
+	// buffer may still sample it, and this only happens when the mask changes.
+	vk_renderer_handle_result(renderer, "vkDeviceWaitIdle",
+		vkDeviceWaitIdle(renderer->device));
+	vkDestroyImageView(renderer->device, renderer->mask_view.view, NULL);
+	renderer->mask_view = (typeof(renderer->mask_view)){0};
+}
+
+VkImageView vk_mask_view_get(struct vk_renderer *renderer, VkImage image,
+		VkFormat format, VkImageLayout *layout) {
+	if (renderer->mask_view.view != VK_NULL_HANDLE &&
+			renderer->mask_view.image == image &&
+			renderer->mask_view.format == format) {
+		*layout = renderer->mask_view.layout;
+		return renderer->mask_view.view;
+	}
+
+	vk_mask_view_finish(renderer);
+
+	VkImageViewCreateInfo view_info = {
+		.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+		.image = image,
+		.viewType = VK_IMAGE_VIEW_TYPE_2D,
+		.format = format,
+		.subresourceRange = (VkImageSubresourceRange){
+			.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+			.levelCount = 1,
+			.layerCount = 1,
+		},
+	};
+	VkImageView view = VK_NULL_HANDLE;
+	VkResult res = vkCreateImageView(renderer->device, &view_info, NULL, &view);
+	if (res != VK_SUCCESS) {
+		vk_renderer_handle_result(renderer, "vkCreateImageView (mask)", res);
+		return VK_NULL_HANDLE;
+	}
+
+	renderer->mask_view.image = image;
+	renderer->mask_view.format = format;
+	renderer->mask_view.view = view;
+	// wlroots' own view of a scene buffer's image samples it read-only.
+	renderer->mask_view.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+	*layout = renderer->mask_view.layout;
+	return view;
+}
+
+void vk_dummy_mask_finish(struct vk_renderer *renderer) {
+	VkDevice dev = renderer->device;
+	if (renderer->dummy_mask.image == VK_NULL_HANDLE) {
+		return;
+	}
+	// Same in-use hazard as effect_image_finish(): a previous frame's command
+	// buffer may still sample it, and this only happens at shutdown.
+	vk_renderer_handle_result(renderer, "vkDeviceWaitIdle", vkDeviceWaitIdle(dev));
+	vkDestroyImageView(dev, renderer->dummy_mask.view, NULL);
+	vkDestroyImage(dev, renderer->dummy_mask.image, NULL);
+	vkFreeMemory(dev, renderer->dummy_mask.memory, NULL);
+	renderer->dummy_mask = (typeof(renderer->dummy_mask)){0};
+}
+
+bool vk_dummy_mask_ensure(struct vk_renderer *renderer) {
+	if (renderer->dummy_mask.initialised) {
+		return true;
+	}
+	VkDevice dev = renderer->device;
+	VkResult res;
+
+	// Opaque white, so no mask sample is ever below any sane alpha threshold and
+	// `has_mask = 0` draws behave as if the mask were not there.
+	VkImageCreateInfo img_info = {
+		.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+		.imageType = VK_IMAGE_TYPE_2D,
+		.format = VK_FORMAT_R8G8B8A8_UNORM,
+		.mipLevels = 1,
+		.arrayLayers = 1,
+		.samples = VK_SAMPLE_COUNT_1_BIT,
+		.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+		.tiling = VK_IMAGE_TILING_OPTIMAL,
+		.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+		.extent = (VkExtent3D){ 1, 1, 1 },
+		.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+	};
+	res = vkCreateImage(dev, &img_info, NULL, &renderer->dummy_mask.image);
+	if (res != VK_SUCCESS) {
+		vk_renderer_handle_result(renderer, "vkCreateImage (dummy mask)", res);
+		goto error;
+	}
+
+	VkMemoryRequirements mem_reqs;
+	vkGetImageMemoryRequirements(dev, renderer->dummy_mask.image, &mem_reqs);
+	int mem_type = vk_find_mem_type(renderer, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+		mem_reqs.memoryTypeBits);
+	if (mem_type < 0) {
+		wlr_log(WLR_ERROR, "no suitable memory type for the dummy mask image");
+		goto error;
+	}
+	VkMemoryAllocateInfo mem_info = {
+		.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+		.allocationSize = mem_reqs.size,
+		.memoryTypeIndex = mem_type,
+	};
+	res = vkAllocateMemory(dev, &mem_info, NULL, &renderer->dummy_mask.memory);
+	if (res != VK_SUCCESS) {
+		vk_renderer_handle_result(renderer, "vkAllocateMemory (dummy mask)", res);
+		goto error;
+	}
+	res = vkBindImageMemory(dev, renderer->dummy_mask.image,
+		renderer->dummy_mask.memory, 0);
+	if (res != VK_SUCCESS) {
+		vk_renderer_handle_result(renderer, "vkBindImageMemory (dummy mask)", res);
+		goto error;
+	}
+
+	VkImageViewCreateInfo view_info = {
+		.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+		.image = renderer->dummy_mask.image,
+		.viewType = VK_IMAGE_VIEW_TYPE_2D,
+		.format = VK_FORMAT_R8G8B8A8_UNORM,
+		.subresourceRange = (VkImageSubresourceRange){
+			.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+			.levelCount = 1,
+			.layerCount = 1,
+		},
+	};
+	res = vkCreateImageView(dev, &view_info, NULL, &renderer->dummy_mask.view);
+	if (res != VK_SUCCESS) {
+		vk_renderer_handle_result(renderer, "vkCreateImageView (dummy mask)", res);
+		goto error;
+	}
+
+	renderer->dummy_mask.initialised = true;
+	return true;
+
+error:
+	vk_dummy_mask_finish(renderer);
+	return false;
+}
+
 void vk_saved_pixels_finish(struct vk_renderer *renderer) {
 	if (renderer->saved_pixels.image == VK_NULL_HANDLE) {
 		return;

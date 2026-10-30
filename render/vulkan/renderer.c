@@ -22,11 +22,16 @@ static inline void free_shaders(struct vk_renderer *vk_renderer) {
 	vk_shader_info_delete(vk_renderer, &vk_renderer->shader_info.blur2);
 	vk_shader_info_delete(vk_renderer, &vk_renderer->shader_info.blur_effects);
 
+	// The effect images' descriptor sets reference the mask views, so they go
+	// before those views and before the pool the sets were allocated from.
+	vk_effect_images_finish(vk_renderer);
+	vk_mask_view_finish(vk_renderer);
+	vk_dummy_mask_finish(vk_renderer);
+
 	// The blur descriptor pool/layout/sampler must go after every descriptor set
 	// allocated from them, which the effect images own.
 	vk_tex_ds_layout_destroy(vk_renderer);
 	vk_saved_pixels_finish(vk_renderer);
-	vk_effect_images_finish(vk_renderer);
 
 	if (vk_renderer->gradient_ds_layout != VK_NULL_HANDLE) {
 		vkDestroyDescriptorSetLayout(vk_renderer->device,

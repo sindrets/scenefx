@@ -184,6 +184,16 @@ struct vk_frag_blur_effects_pcr_data {
 	float saturation;
 	float noise;
 	struct vk_shader_rounding_data corner_rounding;
+
+	// Transparency mask sampling. mask_uv/mask_uv_size map the composite's uv
+	// onto the mask texture; has_mask 0 makes the shader ignore it entirely, in
+	// which case the dummy mask is bound and the fetch still well defined.
+	// ignore_alpha_threshold matches fx_render_blur_pass_options of the same
+	// name: masked pixels at or below it are discarded.
+	float mask_uv[2];
+	float mask_uv_size[2];
+	float ignore_alpha_threshold;
+	float has_mask;
 };
 
 struct vk_pipeline_blur {

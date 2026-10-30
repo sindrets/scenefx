@@ -8,11 +8,22 @@
 // it carries the corner rounding: GLES2 masks the blur with the window shape by
 // drawing the blurred buffer through its rounded texture path, and Vulkan has
 // to do the same or a rounded blur node renders with square corners.
+//
+// It also carries the transparency mask. GLES2 builds a stencil of the window
+// with the mask's transparent pixels excluded and then draws the blurred
+// result through it; Vulkan has no stencil in this render pass, so instead the
+// mask is sampled here and the composite discarded where it is transparent.
+// When the caller has no mask `has_mask` is zero and binding 1 holds a 1x1
+// opaque image, so the fetch below is defined either way.
 
 layout(location = 0) in vec2 uv;
 layout(location = 0) out vec4 out_color;
 
 layout(set = 0, binding = 0) uniform sampler2D tex;
+// The transparency mask. Always bound: when the caller has no mask, a 1x1
+// opaque image is bound instead, so the fetch below is always defined and the
+// blur chain can share this layout while leaving binding 1 to this shader.
+layout(set = 0, binding = 1) uniform sampler2D mask;
 
 layout(push_constant) uniform UBO {
 	layout(offset = 80) float brightness;
@@ -27,6 +38,13 @@ layout(push_constant) uniform UBO {
 	float radius_top_right;
 	float radius_bottom_left;
 	float radius_bottom_right;
+
+	// Coordinates the mask is sampled with, and the alpha below which a masked
+	// pixel is treated as transparent. When has_mask is 0 the mask is ignored.
+	vec2 mask_uv;
+	vec2 mask_uv_size;
+	float ignore_alpha_threshold;
+	float has_mask;
 } data;
 
 #include "corner_alpha.glsl"
@@ -73,6 +91,14 @@ void main() {
 	// Do *not* transpose the combined matrix when multiplying
 	color = brightness_matrix() * contrast_matrix() * saturation_matrix() * color;
 	color.xyz += noise_amount(uv);
+
+	// Transparency mask: skip the composite where the window is transparent, so
+	// the blur does not bleed outside the shapes that actually have content.
+	// This replaces the GLES2 stencil.
+	vec4 mask_color = texture(mask, data.mask_uv + uv * data.mask_uv_size);
+	if (data.has_mask > 0.5 && mask_color.a <= data.ignore_alpha_threshold) {
+		discard;
+	}
 
 	// Rounded corners, matching how the GLES2 path masks the blurred buffer.
 	color *= corner_alpha(

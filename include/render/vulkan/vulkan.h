@@ -192,6 +192,29 @@ struct vk_renderer {
 		bool initialised;
 	} saved_pixels;
 
+	// 1x1 opaque image bound as blur_effects' transparency mask when the caller
+	// has no mask of its own. Every draw that reaches the composite therefore
+	// samples a defined image, so the shader's mask fetch needs no guard.
+	struct {
+		VkImage image;
+		VkDeviceMemory memory;
+		VkImageView view;
+		bool initialised;
+	} dummy_mask;
+
+	// Cached image view of the blur transparency mask's VkImage.
+	//
+	// wlroots only hands out a descriptor set for a wlr_texture, and its layout
+	// was built with a different immutable sampler than ours, so it cannot be
+	// bound to blur_effects. The image behind it is exposed instead, and we
+	// build our own view from it. Masks change rarely, so a single entry does.
+	struct {
+		VkImage image;
+		VkFormat format;
+		VkImageView view;
+		VkImageLayout layout;
+	} mask_view;
+
 	// Cached sampler descriptor set for the wlroots blend image, rebuilt only
 	// when the underlying image view changes.
 	VkDescriptorSet blend_ds;
@@ -238,6 +261,37 @@ bool vk_saved_pixels_ensure(struct vk_renderer *renderer,
 	uint32_t width, uint32_t height);
 void vk_saved_pixels_finish(struct vk_renderer *renderer);
 VkDescriptorSet vk_get_blend_ds(struct vk_renderer *renderer, VkImageView view);
+
+/**
+ * Write `view` into binding 1 (blur_effects' transparency mask) of `ds`.
+ *
+ * Passing VK_NULL_HANDLE binds the renderer's 1x1 opaque dummy instead, so the
+ * shader's fetch is always defined. The layout's bindings use immutable
+ * samplers, so only the view and layout are written.
+ */
+bool vk_tex_ds_set_mask(struct vk_renderer *renderer, VkDescriptorSet ds,
+	VkImageView view, VkImageLayout layout);
+
+/**
+ * The renderer's 1x1 opaque mask stand-in, created on first use.
+ * Returns VK_NULL_HANDLE if it could not be created.
+ */
+bool vk_dummy_mask_ensure(struct vk_renderer *renderer);
+void vk_dummy_mask_finish(struct vk_renderer *renderer);
+
+/**
+ * Our own view of `image`, for sampling it as the blur transparency mask.
+ *
+ * wlr_texture only yields a descriptor set, which is unusable here because its
+ * layout declares a different immutable sampler, so the image is wrapped in a
+ * view of our own instead. Cached; `layout` is set to the image's current
+ * layout, which the caller must pass to vk_tex_ds_set_mask().
+ *
+ * Returns VK_NULL_HANDLE on failure.
+ */
+VkImageView vk_mask_view_get(struct vk_renderer *renderer, VkImage image,
+	VkFormat format, VkImageLayout *layout);
+void vk_mask_view_finish(struct vk_renderer *renderer);
 
 /** Index of a memory type satisfying props, or -1. */
 int vk_find_mem_type(struct vk_renderer *renderer,
