@@ -29,12 +29,13 @@
 // Queries must be reset between uses. vkCmdResetQueryPool cannot be used here:
 // the spec requires it to be called outside of a render pass instance
 // (VUID-vkCmdResetQueryPool-renderpass), and every scenefx draw happens inside
-// one. The host-side vkResetQueryPool has no such restriction, so each ring
-// slot is reset on the host immediately before it is written. That is safe
-// because a slot is not reused until its result has been collected, and
-// collecting implies the submission that wrote it has executed
-// (VUID-vkResetQueryPool-firstQuery-02741). It requires the hostQueryReset
-// feature, which wlroots enables when the device supports it.
+// one. The host-side vkResetQueryPool has no such restriction, but it is not
+// ordered against GPU work at all: the range it touches must have no submitted
+// commands still referring to it (VUID-vkResetQueryPool-firstQuery-02741).
+// Resetting a slot before writing it therefore clears timestamps that are
+// still queued, and the slot later reports "available, value 0" - a duration
+// of garbage. Instead each slot is reset the moment its result is collected,
+// which is the only point at which the write provably completed.
 //
 // A zone that is skipped (ring full, or no pass recording) leaves
 // ctx->is_active false so the matching zone_end is skipped too, keeping
@@ -73,12 +74,10 @@ static bool vk_tracy_ring_full(struct tracy_data *tracy_data) {
 }
 
 static void vk_tracy_write_timestamp(struct vk_renderer *renderer,
-		struct tracy_data *tracy_data, unsigned int query) {
+		unsigned int query) {
 	VkCommandBuffer cb = renderer->tracy_command_buffer;
 	assert(cb != VK_NULL_HANDLE);
 
-	renderer->tracy_reset_query_pool(renderer->device, renderer->tracy_query_pool,
-			query, 1);
 	vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
 			renderer->tracy_query_pool, query);
 }
@@ -111,7 +110,7 @@ static void vk_tracy_gpu_zone_begin(struct fx_renderer *fx_renderer,
 	}
 
 	const unsigned int query = tracy_get_next_query_index(tracy_data);
-	vk_tracy_write_timestamp(renderer, tracy_data, query);
+	vk_tracy_write_timestamp(renderer, query);
 
 	const uint64_t srcloc = ___tracy_alloc_srcloc_name(line,
 			source, strlen(source),
@@ -138,7 +137,7 @@ static void vk_tracy_gpu_zone_end(struct fx_renderer *fx_renderer,
 	}
 
 	const unsigned int query = tracy_get_next_query_index(ctx->tracy_data);
-	vk_tracy_write_timestamp(renderer, ctx->tracy_data, query);
+	vk_tracy_write_timestamp(renderer, query);
 
 	const struct ___tracy_gpu_zone_end_data data = {
 		.context = ctx->tracy_data->context_id,
@@ -166,7 +165,7 @@ static void vk_tracy_gpu_context_collect(struct fx_renderer *fx_renderer,
 
 	while (tracy_data->queue.tail != tracy_data->queue.head) {
 		const unsigned int index = tracy_data->queue.tail;
-		int64_t result[2] = {0};
+		int64_t result[2] = {0, 0};
 
 		// VK_QUERY_RESULT_WITH_AVAILABILITY_BIT never blocks: it returns
 		// (value, availability) pairs. A not-yet-available query leaves itself
@@ -185,6 +184,12 @@ static void vk_tracy_gpu_context_collect(struct fx_renderer *fx_renderer,
 			.queryId = (uint16_t) index,
 		};
 		___tracy_emit_gpu_time(data);
+
+		// The write provably completed, so the slot may be cleared. See the
+		// comment at the top of the file for why the reset cannot happen
+		// earlier.
+		renderer->tracy_reset_query_pool(renderer->device,
+				renderer->tracy_query_pool, index, 1);
 
 		tracy_data->queue.tail = (tracy_data->queue.tail + 1) % QUERY_QUEUE_LEN;
 	}
@@ -231,6 +236,9 @@ static bool vk_tracy_read_initial_timestamp(struct vk_renderer *renderer,
 		.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
 	};
 	vkBeginCommandBuffer(cb, &begin_info);
+	// A query pool must be reset before any query in it is used, otherwise
+	// results are undefined (VUID-vkGetQueryPoolResults-None-09401).
+	vkCmdResetQueryPool(cb, renderer->tracy_query_pool, 0, QUERY_QUEUE_LEN);
 	renderer->tracy_reset_query_pool(renderer->device, renderer->tracy_query_pool, 0, 1);
 	vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
 			renderer->tracy_query_pool, 0);

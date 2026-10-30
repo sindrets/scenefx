@@ -1229,6 +1229,11 @@ struct fx_render_pass *gles2_render_pass_init(struct fx_renderer *fx_renderer,
 
 	fx_render_pass_init(&pass->fx_render_pass, &render_pass_impl, fx_renderer, render_pass);
 
+	// Collect the previous frame's GPU timestamps. Their command stream has been
+	// submitted by now, whereas collecting at pass-destroy time would read
+	// queries that are still in flight.
+	fx_render_pass_collect_gpu_zones(&pass->fx_render_pass);
+
 	pass->gles2_renderer = gles2_get_renderer(fx_renderer);
 	pass->gles2_buffer = gles2_buffer_get_or_create(fx_renderer, wlr_buffer, true);
 	if (pass->gles2_buffer == NULL) {

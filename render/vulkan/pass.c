@@ -1484,6 +1484,11 @@ struct fx_render_pass *vk_render_pass_init(struct fx_renderer *fx_renderer,
 		goto buffer_get_fail;
 	}
 
+	// Collect the previous frame's GPU timestamps now: they were recorded into a
+	// command buffer that has since been submitted and executed, whereas
+	// collecting at pass-destroy time would read queries that are still queued.
+	fx_render_pass_collect_gpu_zones(&pass->fx_render_pass);
+
 	pass->command_buffer = wlr_vk_render_pass_get_command_buffer(render_pass);
 	vk_renderer_set_tracy_command_buffer(vk_renderer, pass->command_buffer);
 	pass->render_setup = vk_render_setup_find_or_create(pass->vk_renderer, render_pass);

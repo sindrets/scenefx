@@ -85,6 +85,14 @@ void fx_render_pass_init(struct fx_render_pass *render_pass,
 		const struct fx_render_pass_impl *impl, struct fx_renderer *fx_renderer,
 		struct wlr_render_pass *wlr_render_pass);
 void fx_render_pass_destroy(struct fx_render_pass *render_pass);
+/**
+ * Emit the GPU timestamps recorded by earlier passes.
+ *
+ * Must be called once the command buffer holding them has been submitted and
+ * executed - in practice at the start of the next pass. Reading them while
+ * still recording reports the queries as available with a zero value.
+ */
+void fx_render_pass_collect_gpu_zones(struct fx_render_pass *render_pass);
 
 ///
 /// fx_renderer
