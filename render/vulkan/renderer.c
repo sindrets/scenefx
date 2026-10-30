@@ -18,6 +18,15 @@ static inline void free_shaders(struct vk_renderer *vk_renderer) {
 	vk_shader_info_delete(vk_renderer, &vk_renderer->shader_info.quad_grad);
 	vk_shader_info_delete(vk_renderer, &vk_renderer->shader_info.box_shadow);
 	vk_shader_info_delete(vk_renderer, &vk_renderer->shader_info.tex);
+	vk_shader_info_delete(vk_renderer, &vk_renderer->shader_info.blur1);
+	vk_shader_info_delete(vk_renderer, &vk_renderer->shader_info.blur2);
+	vk_shader_info_delete(vk_renderer, &vk_renderer->shader_info.blur_effects);
+
+	// The blur descriptor pool/layout/sampler must go after every descriptor set
+	// allocated from them, which the effect images own.
+	vk_tex_ds_layout_destroy(vk_renderer);
+	vk_saved_pixels_finish(vk_renderer);
+	vk_effect_images_finish(vk_renderer);
 
 	if (vk_renderer->gradient_ds_layout != VK_NULL_HANDLE) {
 		vkDestroyDescriptorSetLayout(vk_renderer->device,
@@ -55,6 +64,20 @@ static bool link_shaders(struct vk_renderer *renderer) {
 	// box shadow fragment shader
 	if (!vk_shader_info_create_box_shadow(renderer)) {
 		wlr_log(WLR_ERROR, "Could not link box shadow shaders");
+		goto error;
+	}
+
+	// blur fragment shaders (downsample, upsample, effects composite)
+	if (!vk_shader_info_create_blur1(renderer)) {
+		wlr_log(WLR_ERROR, "Could not link blur1 shader");
+		goto error;
+	}
+	if (!vk_shader_info_create_blur2(renderer)) {
+		wlr_log(WLR_ERROR, "Could not link blur2 shader");
+		goto error;
+	}
+	if (!vk_shader_info_create_blur_effects(renderer)) {
+		wlr_log(WLR_ERROR, "Could not link blur_effects shader");
 		goto error;
 	}
 

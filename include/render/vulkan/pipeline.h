@@ -12,11 +12,19 @@ struct vk_pipeline {
 	VkPipeline pipeline;
 };
 
+// Defined in shaders.h (needs struct vk_pipeline, which lives here).
+struct vk_pipeline_blur;
+
 struct vk_pipelines {
 	struct vk_pipeline_quad *quad;
 	struct vk_pipeline_quad_grad *quad_grad;
 	struct vk_pipeline_box_shadow *box_shadow;
+	struct vk_pipeline_blur *blur1;
+	struct vk_pipeline_blur *blur2;
+	struct vk_pipeline_blur *blur_effects;
 };
+
+
 
 void vk_pipelines_init(struct vk_renderer *renderer, struct vk_render_setup *setup,
 		struct vk_pipelines *out_pipelines);
