@@ -3239,9 +3239,16 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 	// We only want to try direct scanout if:
 	// - There is only one entry in the render list
 	// - There are no color transforms that need to be applied
+	// - The output's color description is not changing: the scene's combined
+	//   color transform is recomputed further down, past the scanout early
+	//   return, so scanning out here would keep rendering through the previous
+	//   transform while the connector switches. That is what leaves a washed
+	//   out, half contrast screen after HDR is turned off, until the next
+	//   composed frame happens to come along.
 	// - Damage highlight debugging is not enabled
 	enum scene_direct_scanout_result scanout_result = SCANOUT_INELIGIBLE;
 	if (options->color_transform == NULL && !render_gamma_lut && list_len == 1
+			&& !(state->committed & WLR_OUTPUT_STATE_IMAGE_DESCRIPTION)
 			&& debug_damage != WLR_SCENE_DEBUG_DAMAGE_HIGHLIGHT) {
 		scanout_result = scene_entry_try_direct_scanout(&list_data[0], state, &render_data);
 	}
