@@ -131,8 +131,20 @@ static void vk_tracy_gpu_zone_end(struct fx_renderer *fx_renderer,
 	struct vk_renderer *renderer = vk_get_renderer(fx_renderer);
 	struct vk_tracy_data *vk_tracy = vk_tracy_get(ctx->tracy_data);
 
-	if (!vk_tracy->usable || renderer->tracy_command_buffer == VK_NULL_HANDLE
-			|| vk_tracy_ring_full(ctx->tracy_data)) {
+	if (!vk_tracy->usable || renderer->tracy_command_buffer == VK_NULL_HANDLE) {
+		return;
+	}
+
+	// A full ring cannot take the closing timestamp, but the matching begin was
+	// already emitted, so the zone still has to be closed - just without a query
+	// attached. Dropping it here would leave every later zone nested under this
+	// one.
+	if (vk_tracy_ring_full(ctx->tracy_data)) {
+		const struct ___tracy_gpu_zone_end_data data = {
+			.context = ctx->tracy_data->context_id,
+			.queryId = 0,
+		};
+		___tracy_emit_gpu_zone_end(data);
 		return;
 	}
 
@@ -239,7 +251,6 @@ static bool vk_tracy_read_initial_timestamp(struct vk_renderer *renderer,
 	// A query pool must be reset before any query in it is used, otherwise
 	// results are undefined (VUID-vkGetQueryPoolResults-None-09401).
 	vkCmdResetQueryPool(cb, renderer->tracy_query_pool, 0, QUERY_QUEUE_LEN);
-	renderer->tracy_reset_query_pool(renderer->device, renderer->tracy_query_pool, 0, 1);
 	vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
 			renderer->tracy_query_pool, 0);
 	vkEndCommandBuffer(cb);
