@@ -1,5 +1,7 @@
 #include "render/vulkan/vulkan.h"
 
+// wlroots has an identical helper (render/vulkan/util.c), but it is an internal
+// symbol and nowhere in the installed headers, so scenefx cannot link against it.
 const char *vulkan_strerror(VkResult err) {
 #define ERR_STR(r) case VK_ ##r: return #r
 	switch (err) {
