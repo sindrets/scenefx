@@ -75,16 +75,21 @@ struct vk_frag_quad_grad_ubo {
 	float origin[4];
 };
 
+/// How many blend modes a pipeline is built for. Blending is baked into the
+/// VkPipeline, so each shader variant needs one pipeline per mode; the index is
+/// the enum wlr_render_blend_mode value.
+#define VK_BLEND_MODE_COUNT 2
+
 struct vk_pipeline_quad {
-	// 4 different combinations of effects
-	struct vk_pipeline variants[SHADER_QUAD_EFFECT_LAST];
+	// 4 different combinations of effects, per blend mode
+	struct vk_pipeline variants[SHADER_QUAD_EFFECT_LAST][VK_BLEND_MODE_COUNT];
 };
 
 bool create_vk_quad_pipelines(struct vk_renderer *renderer, struct vk_render_setup *setup,
 		struct vk_pipeline_quad **out_quad);
 void delete_vk_quad_pipelines(struct vk_renderer *renderer, struct vk_pipeline_quad *quad);
 struct vk_pipeline *get_vk_quad_pipeline(struct vk_pipeline_quad *quad,
-		enum fx_quad_shader_effects effects);
+		enum fx_quad_shader_effects effects, enum wlr_render_blend_mode blend_mode);
 
 bool vk_shader_info_create_quad(struct vk_renderer *renderer);
 
@@ -93,7 +98,7 @@ bool vk_shader_info_create_quad(struct vk_renderer *renderer);
 ///
 
 struct vk_pipeline_quad_grad {
-	struct vk_pipeline variants[SHADER_QUAD_EFFECT_LAST];
+	struct vk_pipeline variants[SHADER_QUAD_EFFECT_LAST][VK_BLEND_MODE_COUNT];
 };
 
 bool create_vk_quad_grad_pipelines(struct vk_renderer *renderer,
@@ -101,7 +106,7 @@ bool create_vk_quad_grad_pipelines(struct vk_renderer *renderer,
 void delete_vk_quad_grad_pipelines(struct vk_renderer *renderer,
 		struct vk_pipeline_quad_grad *quad_grad);
 struct vk_pipeline *get_vk_quad_grad_pipeline(struct vk_pipeline_quad_grad *quad_grad,
-		enum fx_quad_shader_effects effects);
+		enum fx_quad_shader_effects effects, enum wlr_render_blend_mode blend_mode);
 
 bool vk_shader_info_create_quad_grad(struct vk_renderer *renderer);
 
@@ -117,7 +122,7 @@ struct vk_frag_box_shadow_pcr_data {
 };
 
 struct vk_pipeline_box_shadow {
-	struct vk_pipeline variants[SHADER_QUAD_EFFECT_LAST];
+	struct vk_pipeline variants[SHADER_QUAD_EFFECT_LAST][VK_BLEND_MODE_COUNT];
 };
 
 bool create_vk_box_shadow_pipelines(struct vk_renderer *renderer,
@@ -126,7 +131,7 @@ bool create_vk_box_shadow_pipelines(struct vk_renderer *renderer,
 void delete_vk_box_shadow_pipelines(struct vk_renderer *renderer,
 		struct vk_pipeline_box_shadow *box_shadow);
 struct vk_pipeline *get_vk_box_shadow_pipeline(struct vk_pipeline_box_shadow *box_shadow,
-		enum fx_quad_shader_effects effects);
+		enum fx_quad_shader_effects effects, enum wlr_render_blend_mode blend_mode);
 
 bool vk_shader_info_create_box_shadow(struct vk_renderer *renderer);
 
@@ -155,11 +160,13 @@ struct vk_pipeline_tex {
 	enum wlr_scale_filter_mode filter_mode;
 	uint32_t texture_transform;
 	bool srgb_image_view;
+	enum wlr_render_blend_mode blend_mode;
 };
 
 bool create_vk_tex_pipeline(struct vk_renderer *renderer, struct vk_render_setup *setup,
 		enum fx_tex_shader_effects effects, enum wlr_scale_filter_mode filter_mode,
 		uint32_t texture_transform, bool srgb_image_view,
+		enum wlr_render_blend_mode blend_mode,
 		VkDescriptorSetLayout ds_layout, struct vk_pipeline_tex *out_pipeline);
 void delete_vk_tex_pipeline(struct vk_renderer *renderer, struct vk_pipeline_tex *pipeline);
 

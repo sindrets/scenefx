@@ -144,7 +144,8 @@ static void fill_common_pipeline_state(VkPipelineShaderStageCreateInfo stages[2]
 ///
 
 static bool create_pipeline_quad(struct vk_renderer *renderer, struct vk_render_setup *setup,
-		struct vk_pipeline *variant, const enum fx_quad_shader_effects _effects) {
+		struct vk_pipeline *variant, const enum fx_quad_shader_effects _effects,
+		enum wlr_render_blend_mode blend_mode) {
 	const uint32_t effects = _effects;
 	struct vk_shader_info *quad = &renderer->shader_info.quad;
 
@@ -174,7 +175,8 @@ static bool create_pipeline_quad(struct vk_renderer *renderer, struct vk_render_
 	VkDynamicState dyn_states[2];
 	VkPipelineVertexInputStateCreateInfo vertex;
 	fill_common_pipeline_state(stages, &assembly, &rasterization, &blend,
-		&blend_attachment, &multisample, &viewport, &dynamic, dyn_states, &vertex, true);
+		&blend_attachment, &multisample, &viewport, &dynamic, dyn_states, &vertex,
+		blend_mode == WLR_RENDER_BLEND_MODE_PREMULTIPLIED);
 
 	stages[0].module = renderer->shader_info.vert;
 	stages[1] = (VkPipelineShaderStageCreateInfo) {
@@ -225,13 +227,18 @@ bool create_vk_quad_pipelines(struct vk_renderer *renderer, struct vk_render_set
 	for (enum fx_quad_shader_effects effects = 0;
 			effects < SHADER_QUAD_EFFECT_LAST;
 			effects++) {
-		struct vk_pipeline *variant = &quad->variants[effects];
-		variant->pipeline = VK_NULL_HANDLE;
+		for (enum wlr_render_blend_mode blend_mode = 0;
+				blend_mode < VK_BLEND_MODE_COUNT;
+				blend_mode++) {
+			struct vk_pipeline *variant = &quad->variants[effects][blend_mode];
+			variant->pipeline = VK_NULL_HANDLE;
 
-		if (!create_pipeline_quad(renderer, setup, variant, effects)) {
-			wlr_log(WLR_ERROR, "Could not create quad shader pipeline: Effects: \"%d\"",
-					effects);
-			goto failed;
+			if (!create_pipeline_quad(renderer, setup, variant, effects, blend_mode)) {
+				wlr_log(WLR_ERROR,
+					"Could not create quad shader pipeline: Effects: \"%d\" Blend: \"%d\"",
+					effects, blend_mode);
+				goto failed;
+			}
 		}
 	}
 
@@ -252,11 +259,15 @@ void delete_vk_quad_pipelines(struct vk_renderer *renderer, struct vk_pipeline_q
 	for (enum fx_quad_shader_effects effects = 0;
 			effects < SHADER_QUAD_EFFECT_LAST;
 			effects++) {
-		struct vk_pipeline *variant = &quad->variants[effects];
-		if (variant->pipeline != VK_NULL_HANDLE) {
-			vkDestroyPipeline(renderer->device, variant->pipeline, NULL);
-			wl_list_remove(&variant->link);
-			variant->pipeline = VK_NULL_HANDLE;
+		for (enum wlr_render_blend_mode blend_mode = 0;
+				blend_mode < VK_BLEND_MODE_COUNT;
+				blend_mode++) {
+			struct vk_pipeline *variant = &quad->variants[effects][blend_mode];
+			if (variant->pipeline != VK_NULL_HANDLE) {
+				vkDestroyPipeline(renderer->device, variant->pipeline, NULL);
+				wl_list_remove(&variant->link);
+				variant->pipeline = VK_NULL_HANDLE;
+			}
 		}
 	}
 
@@ -264,11 +275,12 @@ void delete_vk_quad_pipelines(struct vk_renderer *renderer, struct vk_pipeline_q
 }
 
 struct vk_pipeline *get_vk_quad_pipeline(struct vk_pipeline_quad *quad,
-		enum fx_quad_shader_effects effects) {
-	if (quad == NULL || effects >= SHADER_QUAD_EFFECT_LAST) {
+		enum fx_quad_shader_effects effects, enum wlr_render_blend_mode blend_mode) {
+	if (quad == NULL || effects >= SHADER_QUAD_EFFECT_LAST ||
+			blend_mode >= VK_BLEND_MODE_COUNT) {
 		return NULL;
 	}
-	return &quad->variants[effects];
+	return &quad->variants[effects][blend_mode];
 }
 
 bool vk_shader_info_create_quad(struct vk_renderer *renderer) {
@@ -345,7 +357,7 @@ static bool create_gradient_descriptor_layout(struct vk_renderer *renderer,
 static bool create_pipeline_gradient(struct vk_renderer *renderer,
 		struct vk_render_setup *setup, struct vk_pipeline *variant,
 		const enum fx_quad_shader_effects _effects, VkShaderModule fragment_module,
-		VkPipelineLayout pipeline_layout) {
+		VkPipelineLayout pipeline_layout, enum wlr_render_blend_mode blend_mode) {
 	const uint32_t effects = _effects;
 
 	VkResult res;
@@ -373,7 +385,8 @@ static bool create_pipeline_gradient(struct vk_renderer *renderer,
 	VkDynamicState dyn_states[2];
 	VkPipelineVertexInputStateCreateInfo vertex;
 	fill_common_pipeline_state(stages, &assembly, &rasterization, &blend,
-		&blend_attachment, &multisample, &viewport, &dynamic, dyn_states, &vertex, true);
+		&blend_attachment, &multisample, &viewport, &dynamic, dyn_states, &vertex,
+		blend_mode == WLR_RENDER_BLEND_MODE_PREMULTIPLIED);
 
 	stages[0].module = renderer->shader_info.vert;
 	stages[1] = (VkPipelineShaderStageCreateInfo) {
@@ -413,17 +426,22 @@ static bool create_pipeline_gradient(struct vk_renderer *renderer,
 }
 
 static bool create_gradient_variants(struct vk_renderer *renderer,
-		struct vk_render_setup *setup, struct vk_pipeline *variants,
+		struct vk_render_setup *setup,
+		struct vk_pipeline (*variants)[VK_BLEND_MODE_COUNT],
 		VkShaderModule fragment_module, VkPipelineLayout pipeline_layout) {
 	for (enum fx_quad_shader_effects effects = 0;
 			effects < SHADER_QUAD_EFFECT_LAST;
 			effects++) {
-		struct vk_pipeline *variant = &variants[effects];
-		variant->pipeline = VK_NULL_HANDLE;
+		for (enum wlr_render_blend_mode blend_mode = 0;
+				blend_mode < VK_BLEND_MODE_COUNT;
+				blend_mode++) {
+			struct vk_pipeline *variant = &variants[effects][blend_mode];
+			variant->pipeline = VK_NULL_HANDLE;
 
-		if (!create_pipeline_gradient(renderer, setup, variant, effects,
-				fragment_module, pipeline_layout)) {
-			return false;
+			if (!create_pipeline_gradient(renderer, setup, variant, effects,
+					fragment_module, pipeline_layout, blend_mode)) {
+				return false;
+			}
 		}
 	}
 
@@ -431,15 +449,19 @@ static bool create_gradient_variants(struct vk_renderer *renderer,
 }
 
 static void delete_gradient_variants(struct vk_renderer *renderer,
-		struct vk_pipeline *variants) {
+		struct vk_pipeline (*variants)[VK_BLEND_MODE_COUNT]) {
 	for (enum fx_quad_shader_effects effects = 0;
 			effects < SHADER_QUAD_EFFECT_LAST;
 			effects++) {
-		struct vk_pipeline *variant = &variants[effects];
-		if (variant->pipeline != VK_NULL_HANDLE) {
-			vkDestroyPipeline(renderer->device, variant->pipeline, NULL);
-			wl_list_remove(&variant->link);
-			variant->pipeline = VK_NULL_HANDLE;
+		for (enum wlr_render_blend_mode blend_mode = 0;
+				blend_mode < VK_BLEND_MODE_COUNT;
+				blend_mode++) {
+			struct vk_pipeline *variant = &variants[effects][blend_mode];
+			if (variant->pipeline != VK_NULL_HANDLE) {
+				vkDestroyPipeline(renderer->device, variant->pipeline, NULL);
+				wl_list_remove(&variant->link);
+				variant->pipeline = VK_NULL_HANDLE;
+			}
 		}
 	}
 }
@@ -477,11 +499,12 @@ void delete_vk_quad_grad_pipelines(struct vk_renderer *renderer,
 }
 
 struct vk_pipeline *get_vk_quad_grad_pipeline(struct vk_pipeline_quad_grad *quad_grad,
-		enum fx_quad_shader_effects effects) {
-	if (quad_grad == NULL || effects >= SHADER_QUAD_EFFECT_LAST) {
+		enum fx_quad_shader_effects effects, enum wlr_render_blend_mode blend_mode) {
+	if (quad_grad == NULL || effects >= SHADER_QUAD_EFFECT_LAST ||
+			blend_mode >= VK_BLEND_MODE_COUNT) {
 		return NULL;
 	}
-	return &quad_grad->variants[effects];
+	return &quad_grad->variants[effects][blend_mode];
 }
 
 bool vk_shader_info_create_quad_grad(struct vk_renderer *renderer) {
@@ -572,11 +595,12 @@ void delete_vk_box_shadow_pipelines(struct vk_renderer *renderer,
 }
 
 struct vk_pipeline *get_vk_box_shadow_pipeline(struct vk_pipeline_box_shadow *box_shadow,
-		enum fx_quad_shader_effects effects) {
-	if (box_shadow == NULL || effects >= SHADER_QUAD_EFFECT_LAST) {
+		enum fx_quad_shader_effects effects, enum wlr_render_blend_mode blend_mode) {
+	if (box_shadow == NULL || effects >= SHADER_QUAD_EFFECT_LAST ||
+			blend_mode >= VK_BLEND_MODE_COUNT) {
 		return NULL;
 	}
-	return &box_shadow->variants[effects];
+	return &box_shadow->variants[effects][blend_mode];
 }
 
 bool vk_shader_info_create_box_shadow(struct vk_renderer *renderer) {
@@ -629,6 +653,7 @@ bool vk_shader_info_create_box_shadow(struct vk_renderer *renderer) {
 bool create_vk_tex_pipeline(struct vk_renderer *renderer, struct vk_render_setup *setup,
 		enum fx_tex_shader_effects effects, enum wlr_scale_filter_mode filter_mode,
 		uint32_t texture_transform, bool srgb_image_view,
+		enum wlr_render_blend_mode blend_mode,
 		VkDescriptorSetLayout ds_layout, struct vk_pipeline_tex *out) {
 	// wlroots hands us the descriptor set layout it built for this texture (one
 	// combined image sampler at binding 0, with the immutable sampler baked in).
@@ -697,9 +722,11 @@ bool create_vk_tex_pipeline(struct vk_renderer *renderer, struct vk_render_setup
 	VkPipelineDynamicStateCreateInfo dynamic;
 	VkDynamicState dyn_states[2];
 	VkPipelineVertexInputStateCreateInfo vertex;
-	// The FX texture shader always emits pre-multiplied alpha.
+	// The FX texture shader always emits pre-multiplied alpha, so premultiplied
+	// blending is the only blend state that can be derived from the source.
 	fill_common_pipeline_state(stages, &assembly, &rasterization, &blend,
-		&blend_attachment, &multisample, &viewport, &dynamic, dyn_states, &vertex, true);
+		&blend_attachment, &multisample, &viewport, &dynamic, dyn_states, &vertex,
+		blend_mode == WLR_RENDER_BLEND_MODE_PREMULTIPLIED);
 
 	stages[0].module = renderer->shader_info.vert;
 	stages[1] = (VkPipelineShaderStageCreateInfo) {
@@ -741,6 +768,7 @@ bool create_vk_tex_pipeline(struct vk_renderer *renderer, struct vk_render_setup
 	out->filter_mode = filter_mode;
 	out->texture_transform = texture_transform;
 	out->srgb_image_view = srgb_image_view;
+	out->blend_mode = blend_mode;
 	wl_list_insert(&setup->tex_pipelines, &out->link);
 	return true;
 }

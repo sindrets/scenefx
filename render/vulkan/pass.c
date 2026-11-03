@@ -406,8 +406,14 @@ static void vk_render_pass_add_rect(struct fx_render_pass *fx_pass,
 	wlr_matrix_project_box(matrix, &box, WL_OUTPUT_TRANSFORM_NORMAL, proj);
 	wlr_matrix_multiply(matrix, pass->projection, matrix);
 
+	// An opaque rect whose corners are not rounded replaces what is underneath,
+	// so blending can be skipped; anything else honours the caller's mode.
+	enum wlr_render_blend_mode blend_mode =
+		(options->color.a == 1.0 && !should_clip) ?
+		WLR_RENDER_BLEND_MODE_NONE : options->blend_mode;
+
 	struct vk_pipeline *pipeline = get_vk_quad_pipeline(
-		pass->render_setup->vk_pipelines.quad, effects);
+		pass->render_setup->vk_pipelines.quad, effects, blend_mode);
 	if (pipeline == NULL) {
 		pixman_region32_fini(&clip_region);
 		TRACY_GPU_ZONE_END;
@@ -488,8 +494,11 @@ static void vk_render_pass_add_rounded_rect(struct fx_render_pass *fx_pass,
 	wlr_matrix_project_box(matrix, &box, WL_OUTPUT_TRANSFORM_NORMAL, proj);
 	wlr_matrix_multiply(matrix, pass->projection, matrix);
 
+	// Rounded rects always blend: GLES2 does the same, since the corner
+	// antialiasing needs the destination underneath.
 	struct vk_pipeline *pipeline = get_vk_quad_pipeline(
-		pass->render_setup->vk_pipelines.quad, effects);
+		pass->render_setup->vk_pipelines.quad, effects,
+		WLR_RENDER_BLEND_MODE_PREMULTIPLIED);
 	if (pipeline == NULL) {
 		pixman_region32_fini(&clip_region);
 		TRACY_GPU_ZONE_END;
@@ -787,7 +796,7 @@ static void vk_render_pass_add_grad_common(struct vk_render_pass *pass,
 	}
 
 	struct vk_pipeline *pipeline = get_vk_quad_grad_pipeline(
-		pass->render_setup->vk_pipelines.quad_grad, effects);
+		pass->render_setup->vk_pipelines.quad_grad, effects, options->blend_mode);
 	if (pipeline == NULL) {
 		pixman_region32_fini(&clip_region);
 		return;
@@ -910,8 +919,11 @@ static void vk_render_pass_add_box_shadow(struct fx_render_pass *fx_pass,
 		effects |= SHADER_QUAD_EFFECT_CLIPPING;
 	}
 
+	// The shadow's soft edges always need the destination underneath, which is
+	// what GLES2 does too.
 	struct vk_pipeline *pipeline = get_vk_box_shadow_pipeline(
-		pass->render_setup->vk_pipelines.box_shadow, effects);
+		pass->render_setup->vk_pipelines.box_shadow, effects,
+		WLR_RENDER_BLEND_MODE_PREMULTIPLIED);
 	if (pipeline == NULL) {
 		pixman_region32_fini(&clip_region);
 		TRACY_GPU_ZONE_END;
@@ -1680,13 +1692,15 @@ get_texture_transform(struct wlr_texture *texture, enum wlr_color_transfer_funct
 static struct vk_pipeline_tex *get_tex_pipeline(struct vk_render_pass *pass,
 		struct wlr_texture *texture, enum wlr_color_transfer_function tf,
 		enum fx_tex_shader_effects effects, enum wlr_scale_filter_mode filter_mode,
-		enum vk_fx_texture_transform transform, bool srgb) {
+		enum vk_fx_texture_transform transform, bool srgb,
+		enum wlr_render_blend_mode blend_mode) {
 	struct vk_render_setup *setup = pass->render_setup;
 
 	struct vk_pipeline_tex *pipeline;
 	wl_list_for_each(pipeline, &setup->tex_pipelines, link) {
 		if (pipeline->effects == effects && pipeline->filter_mode == filter_mode
-				&& pipeline->texture_transform == transform) {
+				&& pipeline->texture_transform == transform
+				&& pipeline->blend_mode == blend_mode) {
 			return pipeline;
 		}
 	}
@@ -1704,7 +1718,7 @@ static struct vk_pipeline_tex *get_tex_pipeline(struct vk_render_pass *pass,
 		pass->fx_render_pass.render_pass, texture, filter_mode, tf);
 
 	if (!create_vk_tex_pipeline(pass->vk_renderer, setup, effects, filter_mode,
-			transform, srgb, ds_layout, pipeline)) {
+			transform, srgb, blend_mode, ds_layout, pipeline)) {
 		free(pipeline);
 		return NULL;
 	}
@@ -1769,8 +1783,15 @@ static void vk_render_pass_add_texture(struct fx_render_pass *fx_pass,
 		effects |= SHADER_TEXTURE_EFFECT_DISCARD_TRANSPARENT;
 	}
 
+	// Mirror GLES2's choice: an opaque source drawn without effects simply
+	// replaces the destination, everything else honours the caller's mode.
+	bool has_alpha = wlr_vk_texture_has_alpha(options->texture) || alpha < 1.0 ||
+		effects != SHADER_TEXTURE_EFFECT_NONE;
+	enum wlr_render_blend_mode blend_mode =
+		!has_alpha ? WLR_RENDER_BLEND_MODE_NONE : options->blend_mode;
+
 	struct vk_pipeline_tex *pipeline = get_tex_pipeline(pass, options->texture, tf,
-		effects, options->filter_mode, transform, srgb_image_view);
+		effects, options->filter_mode, transform, srgb_image_view, blend_mode);
 	if (pipeline == NULL) {
 		wlr_log(WLR_ERROR, "Failed to get a vulkan texture pipeline");
 		return;
