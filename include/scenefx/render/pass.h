@@ -141,7 +141,11 @@ bool fx_render_pass_add_optimized_blur(struct fx_render_pass *pass,
 		const struct fx_render_blur_pass_options *fx_options);
 
 /**
- * Render from one buffer to another
+ * Render from one buffer to another.
+ *
+ * Only implemented by the GLES2 renderer, which uses it to keep its offscreen
+ * copies. The Vulkan renderer keeps no such wlr_buffers - the blur chain works
+ * on 16F VkImages - so there it does nothing.
  */
 void fx_render_pass_read_to_buffer(struct fx_render_pass *pass,
 		const pixman_region32_t *region, struct wlr_buffer *dst_buffer,

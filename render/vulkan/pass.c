@@ -700,6 +700,10 @@ static void push_gradient_ubo(struct vk_frag_quad_grad_ubo *ubo,
 	// Gradient colours are given in sRGB, the shader converts them into linear
 	// space (the render target is an sRGB image and vulkan does the reverse
 	// conversion on write).
+	// Unlike GLES2, which relinks its gradient program for up to count + 1
+	// colours, the Vulkan shaders take a fixed-size array, so a gradient with more
+	// than MAX_GRADIENT_COLORS stops is truncated. This is the one documented
+	// parity gap of this kind; see README.md.
 	const int count = gradient->count < MAX_GRADIENT_COLORS
 		? gradient->count : MAX_GRADIENT_COLORS;
 	if (gradient->count > MAX_GRADIENT_COLORS) {

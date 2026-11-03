@@ -90,6 +90,8 @@ newer, so the differences below are deliberate or still open:
 | Blur transparency mask          | stencil | sampled mask texture |
 | Blur padding save/restore       | yes     | yes                  |
 | Optimized blur nodes            | yes     | yes                  |
+| `blend_mode` honoured           | yes     | yes                  |
+| Gradient stops                  | any     | 16 (extras dropped)  |
 | Explicit sync (`wait_timeline`) | yes     | yes                  |
 | Device-lost propagation         | yes     | yes                  |
 | Tracy GPU zones                 | yes     | yes                  |
@@ -111,6 +113,10 @@ Two things are worth knowing before switching a compositor over:
   strength below 1.0: GLES2 re-blurs an unblurred copy kept alongside the cache,
   which Vulkan does not maintain, so it blurs the live frame instead. The result
   is visually equivalent, just not identical.
+
+`fx_render_pass_read_to_buffer()` is a no-op on Vulkan. It exists for the GLES2
+renderer's offscreen copies; the Vulkan renderer works on 16-bit float `VkImage`s
+throughout and keeps no intermediate `wlr_buffer`s to copy through.
 
 `wlr_render_timer` requires wlroots work first: its Vulkan renderer has no
 `render_timer_create` at all, so the call returns `NULL` regardless of SceneFX.
