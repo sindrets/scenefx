@@ -122,6 +122,15 @@ struct gles2_renderer {
 	} shaders;
 
 	struct wl_list buffers; // gles2_buffer.link
+
+#ifdef TRACY_ENABLE
+	// GL query names for the GPU timestamp ring. These are the one piece of
+	// tracy_data that only the GLES2 backend needs (it has to hand real query
+	// objects to glGetQueryObjectui64vEXT), so they live here rather than in the
+	// shared struct, where they would cost the Vulkan backend 256 KiB per context
+	// for nothing.
+	uint32_t tracy_queries[QUERY_QUEUE_LEN];
+#endif
 };
 
 struct fx_renderer *gles2_renderer_create(struct wlr_renderer *wlr_renderer);

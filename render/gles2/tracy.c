@@ -32,7 +32,7 @@ static void gles2_tracy_gpu_zone_begin(struct fx_renderer *fx_renderer, struct t
 
 	// Create the query object
 	const unsigned int query = tracy_get_next_query_index(tracy_data);
-	gles2_renderer->gl_procs.glQueryCounterEXT(tracy_data->queue.queries[query], GL_TIMESTAMP_EXT);
+	gles2_renderer->gl_procs.glQueryCounterEXT(gles2_renderer->tracy_queries[query], GL_TIMESTAMP_EXT);
 
 	// Label the zone
 	uint64_t srcloc = ___tracy_alloc_srcloc_name(line,
@@ -56,7 +56,7 @@ static void gles2_tracy_gpu_zone_end(struct fx_renderer *fx_renderer, struct tra
 
 	// Create the query object
 	const unsigned int query = tracy_get_next_query_index(tracy_data);
-	gles2_renderer->gl_procs.glQueryCounterEXT(tracy_data->queue.queries[query], GL_TIMESTAMP_EXT);
+	gles2_renderer->gl_procs.glQueryCounterEXT(gles2_renderer->tracy_queries[query], GL_TIMESTAMP_EXT);
 
 	// End the Tracy GPU zone
 	const struct ___tracy_gpu_zone_end_data data = {
@@ -84,7 +84,7 @@ static void gles2_tracy_gpu_context_collect(struct fx_renderer *fx_renderer, str
 	while (tracy_data->queue.tail != tracy_data->queue.head) {
 		GLint available;
 		gles2_renderer->gl_procs.glGetQueryObjectivEXT(
-				tracy_data->queue.queries[tracy_data->queue.tail],
+				gles2_renderer->tracy_queries[tracy_data->queue.tail],
 				GL_QUERY_RESULT_AVAILABLE_EXT, &available);
 		if (!available) {
 			return;
@@ -92,7 +92,7 @@ static void gles2_tracy_gpu_context_collect(struct fx_renderer *fx_renderer, str
 
 		GLuint64 time;
 		gles2_renderer->gl_procs.glGetQueryObjectui64vEXT(
-				tracy_data->queue.queries[tracy_data->queue.tail],
+				gles2_renderer->tracy_queries[tracy_data->queue.tail],
 				GL_QUERY_RESULT_EXT, &time);
 
 		const struct ___tracy_gpu_time_data data = {
@@ -109,7 +109,7 @@ static void gles2_tracy_gpu_context_collect(struct fx_renderer *fx_renderer, str
 static void gles2_tracy_gpu_context_destroy(struct fx_renderer *fx_renderer, struct tracy_data *tracy_data) {
 	struct gles2_renderer *gles2_renderer = gles2_get_renderer(fx_renderer);
 
-	gles2_renderer->gl_procs.glDeleteQueriesEXT(QUERY_QUEUE_LEN, tracy_data->queue.queries);
+	gles2_renderer->gl_procs.glDeleteQueriesEXT(QUERY_QUEUE_LEN, gles2_renderer->tracy_queries);
 }
 
 static struct tracy_data *gles2_tracy_gpu_context_new(struct fx_renderer *fx_renderer) {
@@ -127,7 +127,7 @@ static struct tracy_data *gles2_tracy_gpu_context_new(struct fx_renderer *fx_ren
 	tracy_data->queue.tail = 0;
 
 	// Create the query objects
-	gles2_renderer->gl_procs.glGenQueriesEXT(QUERY_QUEUE_LEN, tracy_data->queue.queries);
+	gles2_renderer->gl_procs.glGenQueriesEXT(QUERY_QUEUE_LEN, gles2_renderer->tracy_queries);
 
 	// Get the current GL time
 	GLint64 gl_gpu_time;

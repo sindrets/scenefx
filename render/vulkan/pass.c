@@ -534,24 +534,6 @@ static void vk_render_pass_add_rounded_rect(struct fx_render_pass *fx_pass,
 // Growing by this many entries at a time amortizes the allocation cost.
 #define GRADIENT_UBO_ENTRIES 8
 
-// wlroots' equivalent lives in its private headers, which are not installed.
-static int find_mem_type(struct vk_renderer *vk_renderer,
-		VkMemoryPropertyFlags required, uint32_t type_bits) {
-	VkPhysicalDeviceMemoryProperties mem_props;
-	vkGetPhysicalDeviceMemoryProperties(vk_renderer->physical_device, &mem_props);
-
-	for (uint32_t i = 0; i < mem_props.memoryTypeCount; i++) {
-		if ((type_bits & (1u << i)) == 0) {
-			continue;
-		}
-		if ((mem_props.memoryTypes[i].propertyFlags & required) == required) {
-			return (int)i;
-		}
-	}
-
-	return -1;
-}
-
 static struct vk_pass_resources *pass_resources_ref(
 		struct vk_pass_resources *resources) {
 	resources->refs++;
@@ -614,7 +596,7 @@ static struct vk_gradient_arena *create_gradient_arena(struct vk_render_pass *pa
 	VkMemoryRequirements mem_reqs;
 	vkGetBufferMemoryRequirements(dev, arena->buffer, &mem_reqs);
 
-	const int mem_type_index = find_mem_type(vk_renderer,
+	const int mem_type_index = vk_find_mem_type(vk_renderer,
 		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
 		mem_reqs.memoryTypeBits);
 	if (mem_type_index < 0) {
@@ -801,18 +783,19 @@ static void vk_render_pass_add_grad_common(struct vk_render_pass *pass,
 	wlr_matrix_project_box(matrix, &box, WL_OUTPUT_TRANSFORM_NORMAL, proj);
 	wlr_matrix_multiply(matrix, pass->projection, matrix);
 
-	// The base colour's alpha fades the gradient out at the corners (see
-	// mix(vec4(0.0), gradient(...), rect_alpha) in the gles2 shader).
-	const float alpha = 1.0f;
-
 	struct vk_vert_pcr_data vert_pcr_data = {
 		.uv_off = { 0, 0 },
 		.uv_size = { 1, 1 },
 	};
 	encode_proj_matrix(matrix, vert_pcr_data.mat4);
 
+	// Only .a is read by quad_grad.frag, which uses it to fade the gradient out
+	// at a rounded corner. The base colour is NOT multiplied in: GLES2's gradient
+	// programs never feed the vertex colour attribute, so v_color.a stays at the
+	// default 1.0 there too. Reading options->color.a here would be a behaviour
+	// change on both renderers, not a parity fix.
 	struct vk_frag_quad_pcr_data quad_pcr_data = {
-		.color = { alpha, alpha, alpha, alpha },
+		.color = { 1.0f, 1.0f, 1.0f, 1.0f },
 	};
 	if (corners != NULL) {
 		push_rounding_data(&quad_pcr_data.corner_rounding, &box, corners);

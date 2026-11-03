@@ -25,8 +25,10 @@ struct tracy_data {
 
 	uint8_t context_id;
 
+	// Ring positions, shared by both backends. The ring *contents* live in the
+	// backend that owns real query objects: gles2 keeps GL query names here,
+	// Vulkan addresses its query pool by index and needs no per-slot storage.
 	struct {
-		uint32_t queries[QUERY_QUEUE_LEN];
 		uint32_t head;
 		uint32_t tail;
 	} queue;
