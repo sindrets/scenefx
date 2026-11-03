@@ -25,8 +25,8 @@
 /// wlroots functions
 ///
 
-static void gradient_state_unref(struct vk_renderer *vk_renderer,
-		struct vk_gradient_state *state);
+static void pass_resources_unref(struct vk_renderer *vk_renderer,
+		struct vk_pass_resources *resources);
 static void gradient_arena_destroy(struct vk_renderer *vk_renderer,
 		struct vk_gradient_arena *arena);
 
@@ -184,18 +184,19 @@ static void blur_padding_copy(struct fx_render_pass *fx_pass,
 	}
 
 	struct vk_render_pass *pass = vk_get_render_pass(fx_pass);
-	struct vk_renderer *renderer = pass->vk_renderer;
+	struct vk_offscreen_buffers *offscreen_buffers = pass->vk_offscreen_buffers;
 	struct wlr_buffer *buffer = pass->render_buffer->wlr_buffer;
 
 	VkImage blend = wlr_vk_render_pass_get_blend_image(fx_pass->render_pass);
 	if (blend == VK_NULL_HANDLE) {
 		return;
 	}
-	if (!vk_saved_pixels_ensure(renderer, buffer->width, buffer->height)) {
+	if (!vk_saved_pixels_ensure(pass, buffer->width, buffer->height)) {
 		return;
 	}
+	struct vk_saved_pixels *saved_pixels = &offscreen_buffers->saved_pixels;
 	// Nothing has been saved yet, so there is nothing to paste back.
-	if (!save && !renderer->saved_pixels.initialised) {
+	if (!save && !saved_pixels->initialised) {
 		return;
 	}
 
@@ -210,14 +211,14 @@ static void blur_padding_copy(struct fx_render_pass *fx_pass,
 	}
 
 	VkCommandBuffer cb = pass->command_buffer;
-	VkImage src = save ? blend : renderer->saved_pixels.image;
-	VkImage dst = save ? renderer->saved_pixels.image : blend;
+	VkImage src = save ? blend : saved_pixels->image;
+	VkImage dst = save ? saved_pixels->image : blend;
 
 	// The blend image sits in SHADER_READ_ONLY_OPTIMAL after the suspend; the
 	// snapshot image is UNDEFINED until first written, then TRANSFER_SRC.
 	// After any previous save the snapshot parks in TRANSFER_SRC; before the
 	// first one its contents are undefined.
-	VkImageLayout saved_old = renderer->saved_pixels.initialised ?
+	VkImageLayout saved_old = saved_pixels->initialised ?
 		VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
 
 	VkImageSubresourceRange range = {
@@ -245,7 +246,7 @@ static void blur_padding_copy(struct fx_render_pass *fx_pass,
 				VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 			.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
 			.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-			.image = renderer->saved_pixels.image,
+			.image = saved_pixels->image,
 			.subresourceRange = range,
 			.srcAccessMask = 0,
 			.dstAccessMask = save ? VK_ACCESS_TRANSFER_WRITE_BIT : VK_ACCESS_TRANSFER_READ_BIT,
@@ -261,10 +262,10 @@ static void blur_padding_copy(struct fx_render_pass *fx_pass,
 		// runs past the edge is invalid usage (and loses the device).
 		int32_t x1 = rects[i].x1 < 0 ? 0 : rects[i].x1;
 		int32_t y1 = rects[i].y1 < 0 ? 0 : rects[i].y1;
-		int32_t x2 = rects[i].x2 > (int32_t)renderer->saved_pixels.width ?
-			(int32_t)renderer->saved_pixels.width : rects[i].x2;
-		int32_t y2 = rects[i].y2 > (int32_t)renderer->saved_pixels.height ?
-			(int32_t)renderer->saved_pixels.height : rects[i].y2;
+		int32_t x2 = rects[i].x2 > (int32_t)saved_pixels->width ?
+			(int32_t)saved_pixels->width : rects[i].x2;
+		int32_t y2 = rects[i].y2 > (int32_t)saved_pixels->height ?
+			(int32_t)saved_pixels->height : rects[i].y2;
 
 		int32_t x = x1, y = y1;
 		int32_t w = x2 - x1;
@@ -306,7 +307,7 @@ static void blur_padding_copy(struct fx_render_pass *fx_pass,
 			.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 			.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
 			.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-			.image = renderer->saved_pixels.image,
+			.image = saved_pixels->image,
 			.subresourceRange = range,
 			.srcAccessMask = save ? VK_ACCESS_TRANSFER_WRITE_BIT : VK_ACCESS_TRANSFER_READ_BIT,
 			.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
@@ -317,7 +318,7 @@ static void blur_padding_copy(struct fx_render_pass *fx_pass,
 		0, 0, NULL, 0, NULL, 2, from_transfer);
 
 	if (save) {
-		renderer->saved_pixels.initialised = true;
+		saved_pixels->initialised = true;
 	}
 
 	if (!wlr_vk_render_pass_resume(fx_pass->render_pass)) {
@@ -352,7 +353,7 @@ static void vk_render_pass_destroy(struct fx_render_pass *fx_pass) {
 		vk_renderer_set_tracy_command_buffer(vk_renderer, VK_NULL_HANDLE);
 	}
 
-	gradient_state_unref(vk_renderer, vk_render_pass->gradient_state);
+	pass_resources_unref(vk_renderer, vk_render_pass->resources);
 	free(vk_render_pass);
 }
 
@@ -550,25 +551,26 @@ static int find_mem_type(struct vk_renderer *vk_renderer,
 	return -1;
 }
 
-static struct vk_gradient_state *gradient_state_ref(struct vk_gradient_state *state) {
-	state->refs++;
-	return state;
+static struct vk_pass_resources *pass_resources_ref(
+		struct vk_pass_resources *resources) {
+	resources->refs++;
+	return resources;
 }
 
-static void gradient_state_unref(struct vk_renderer *vk_renderer,
-		struct vk_gradient_state *state) {
-	assert(state->refs > 0);
-	if (--state->refs > 0) {
+static void pass_resources_unref(struct vk_renderer *vk_renderer,
+		struct vk_pass_resources *resources) {
+	assert(resources->refs > 0);
+	if (--resources->refs > 0) {
 		return;
 	}
 
 	struct vk_gradient_arena *arena, *arena_tmp;
-	wl_list_for_each_safe(arena, arena_tmp, &state->arenas, link) {
+	wl_list_for_each_safe(arena, arena_tmp, &resources->arenas, link) {
 		wl_list_remove(&arena->link);
 		gradient_arena_destroy(vk_renderer, arena);
 	}
 
-	free(state);
+	free(resources);
 }
 
 static void gradient_arena_destroy(struct vk_renderer *vk_renderer,
@@ -685,7 +687,9 @@ static struct vk_gradient_arena *create_gradient_arena(struct vk_render_pass *pa
 	};
 	vkUpdateDescriptorSets(dev, 1, &write, 0, NULL);
 
-	wl_list_insert(&pass->gradient_state->arenas, &arena->link);
+	// Append, so bind_gradient() can find the newest arena at the tail and keep
+	// filling it instead of allocating a fresh one for every gradient node.
+	wl_list_insert(pass->resources->arenas.prev, &arena->link);
 	return arena;
 
 error:
@@ -736,8 +740,8 @@ static void push_gradient_ubo(struct vk_frag_quad_grad_ubo *ubo,
 static bool bind_gradient(struct vk_render_pass *pass, VkPipelineLayout layout,
 		const struct fx_gradient *gradient) {
 	struct vk_gradient_arena *arena = NULL;
-	if (!wl_list_empty(&pass->gradient_state->arenas)) {
-		arena = wl_container_of(pass->gradient_state->arenas.prev, arena, link);
+	if (!wl_list_empty(&pass->resources->arenas)) {
+		arena = wl_container_of(pass->resources->arenas.prev, arena, link);
 		if (arena->used + GRADIENT_UBO_STRIDE > arena->size) {
 			arena = NULL;
 		}
@@ -974,8 +978,7 @@ static void vk_render_pass_add_box_shadow(struct fx_render_pass *fx_pass,
 static void render_blur_step(struct vk_render_pass *pass,
 		struct vk_effect_image *dst, VkDescriptorSet src_ds,
 		struct vk_pipeline_blur *blur_pipeline, const pixman_region32_t *region,
-		float radius, bool downsample, int src_level) {
-	struct vk_renderer *renderer = pass->vk_renderer;
+		float radius, bool downsample) {
 	VkCommandBuffer cb = pass->command_buffer;
 
 	int rects_len;
@@ -993,7 +996,7 @@ static void render_blur_step(struct vk_render_pass *pass,
 		.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
 		.renderArea = (VkRect2D){ .extent = { dst->width, dst->height } },
 		.clearValueCount = 0,
-		.renderPass = renderer->effect_render_pass,
+		.renderPass = pass->vk_offscreen_buffers->effect_render_pass,
 		.framebuffer = dst->framebuffer,
 	};
 	vkCmdBeginRenderPass(cb, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
@@ -1042,7 +1045,6 @@ static void render_blur_step(struct vk_render_pass *pass,
 	float src_y1 = extents->y1 * scale;
 	float src_x2 = extents->x2 * scale;
 	float src_y2 = extents->y2 * scale;
-	(void)src_level;
 
 	struct vk_frag_blur_pcr_data blur_pcr_data = {
 		.halfpixel = {
@@ -1095,8 +1097,6 @@ static void render_blur_step(struct vk_render_pass *pass,
 static VkDescriptorSet render_blur_chain(struct vk_render_pass *pass,
 		struct vk_pipelines *pipelines, VkDescriptorSet src_ds,
 		const pixman_region32_t *damage, const struct blur_data *blur_data) {
-	struct vk_renderer *renderer = pass->vk_renderer;
-
 	pixman_region32_t scaled_damage;
 	pixman_region32_init(&scaled_damage);
 
@@ -1106,17 +1106,17 @@ static VkDescriptorSet render_blur_chain(struct vk_render_pass *pass,
 
 	for (int i = 0; i < blur_data->num_passes; i++) {
 		wlr_region_scale(&scaled_damage, damage, 1.0f / (1 << (i + 1)));
-		render_blur_step(pass, &renderer->effect_images[dst_index], src_ds,
-			pipelines->blur1, &scaled_damage, blur_data->radius, true, i);
-		src_ds = renderer->effect_images[dst_index].ds;
+		render_blur_step(pass, &pass->vk_offscreen_buffers->effect_images[dst_index],
+			src_ds, pipelines->blur1, &scaled_damage, blur_data->radius, true);
+		src_ds = pass->vk_offscreen_buffers->effect_images[dst_index].ds;
 		dst_index ^= 1;
 	}
 
 	for (int i = blur_data->num_passes - 1; i >= 0; i--) {
 		wlr_region_scale(&scaled_damage, damage, 1.0f / (1 << i));
-		render_blur_step(pass, &renderer->effect_images[dst_index], src_ds,
-			pipelines->blur2, &scaled_damage, blur_data->radius, false, i + 1);
-		src_ds = renderer->effect_images[dst_index].ds;
+		render_blur_step(pass, &pass->vk_offscreen_buffers->effect_images[dst_index],
+			src_ds, pipelines->blur2, &scaled_damage, blur_data->radius, false);
+		src_ds = pass->vk_offscreen_buffers->effect_images[dst_index].ds;
 		dst_index ^= 1;
 	}
 
@@ -1124,7 +1124,7 @@ static VkDescriptorSet render_blur_chain(struct vk_render_pass *pass,
 
 	// dst_index was advanced past the last write; step back to the image that
 	// actually holds the blurred result.
-	return renderer->effect_images[dst_index ^ 1].ds;
+	return pass->vk_offscreen_buffers->effect_images[dst_index ^ 1].ds;
 }
 
 static void vk_render_pass_add_blur(struct fx_render_pass *fx_pass,
@@ -1163,11 +1163,11 @@ static void vk_render_pass_add_blur(struct fx_render_pass *fx_pass,
 	// Effect framebuffers must be built against the scene render pass so the
 	// blur pipelines stay compatible with them.
 	VkRenderPass scene_pass = wlr_vk_render_pass_get_render_pass(fx_pass->render_pass);
-	if (!vk_effect_images_ensure(renderer, scene_pass, buffer->width, buffer->height)) {
+	if (!vk_effect_images_ensure(pass, scene_pass, buffer->width, buffer->height)) {
 		TRACY_GPU_ZONE_END;
 		return;
 	}
-	VkDescriptorSet blend_ds = vk_get_blend_ds(renderer, blend_view);
+	VkDescriptorSet blend_ds = vk_get_blend_ds(pass, blend_view);
 	if (blend_ds == VK_NULL_HANDLE) {
 		TRACY_GPU_ZONE_END;
 		return;
@@ -1233,8 +1233,8 @@ static void vk_render_pass_add_blur(struct fx_render_pass *fx_pass,
 
 		struct wlr_vk_image_attribs attribs;
 		wlr_vk_texture_get_image_attribs(mask_tex, &attribs);
-		mask_view = vk_mask_view_get(renderer, attribs.image, attribs.format,
-			&mask_layout);
+		mask_view = vk_mask_view_get(pass->vk_offscreen_buffers, renderer,
+			pass->command_buffer, attribs.image, attribs.format, &mask_layout);
 		if (mask_view == VK_NULL_HANDLE) {
 			wlr_log(WLR_ERROR, "Failed to create a view of the blur transparency mask");
 			pixman_region32_fini(&damage);
@@ -1458,7 +1458,7 @@ static bool render_blur_into_cache(struct vk_render_pass *pass,
 		.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
 		.renderArea = (VkRect2D){ .extent = { cache->width, cache->height } },
 		.clearValueCount = 0,
-		.renderPass = renderer->effect_render_pass,
+		.renderPass = pass->vk_offscreen_buffers->effect_render_pass,
 		.framebuffer = cache->framebuffer,
 	};
 	vkCmdBeginRenderPass(cb, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
@@ -1552,13 +1552,13 @@ static bool vk_render_pass_add_optimized_blur(struct fx_render_pass *fx_pass,
 	}
 	VkRenderPass scene_pass = wlr_vk_render_pass_get_render_pass(fx_pass->render_pass);
 	struct vk_effect_image *cache = &pass->vk_offscreen_buffers->optimized_blur;
-	if (!vk_effect_images_ensure(renderer, scene_pass, buffer->width, buffer->height) ||
+	if (!vk_effect_images_ensure(pass, scene_pass, buffer->width, buffer->height) ||
 			!vk_optimized_blur_ensure(cache, renderer, scene_pass,
 				buffer->width, buffer->height)) {
 		TRACY_GPU_ZONE_END;
 		return false;
 	}
-	VkDescriptorSet blend_ds = vk_get_blend_ds(renderer, blend_view);
+	VkDescriptorSet blend_ds = vk_get_blend_ds(pass, blend_view);
 	struct vk_pipelines *pipelines = &pass->render_setup->vk_pipelines;
 	if (blend_ds == VK_NULL_HANDLE || pipelines->blur1 == NULL ||
 			pipelines->blur2 == NULL) {
@@ -1836,8 +1836,9 @@ static const struct fx_render_pass_impl render_pass_impl = {
 // Called by wlroots once the command buffer has finished executing, so every
 // resource recorded into it can be dropped now.
 static void handle_release_resources(void *user_data) {
-	struct vk_gradient_state *state = user_data;
-	gradient_state_unref(state->vk_renderer, state);
+	struct vk_pass_resources *resources = user_data;
+	vk_deferred_destroy_run_for(resources->vk_renderer, resources->command_buffer);
+	pass_resources_unref(resources->vk_renderer, resources);
 }
 
 struct fx_render_pass *vk_render_pass_init(struct fx_renderer *fx_renderer,
@@ -1870,14 +1871,14 @@ struct fx_render_pass *vk_render_pass_init(struct fx_renderer *fx_renderer,
 
 	pass->vk_renderer = vk_renderer;
 
-	pass->gradient_state = calloc(1, sizeof(*pass->gradient_state));
-	if (pass->gradient_state == NULL) {
-		wlr_log_errno(WLR_ERROR, "Failed to create the gradient state");
-		goto gradient_state_fail;
+	pass->resources = calloc(1, sizeof(*pass->resources));
+	if (pass->resources == NULL) {
+		wlr_log_errno(WLR_ERROR, "Failed to create the pass resources");
+		goto resources_fail;
 	}
-	wl_list_init(&pass->gradient_state->arenas);
-	pass->gradient_state->refs = 1;
-	pass->gradient_state->vk_renderer = vk_renderer;
+	wl_list_init(&pass->resources->arenas);
+	pass->resources->refs = 1;
+	pass->resources->vk_renderer = vk_renderer;
 
 	pass->render_buffer = vk_buffer_get_or_create(fx_renderer, wlr_buffer);
 	if (pass->render_buffer == NULL) {
@@ -1934,8 +1935,9 @@ struct fx_render_pass *vk_render_pass_init(struct fx_renderer *fx_renderer,
 	// One extra reference for the command buffer's resource callback: wlroots
 	// calls it once the command buffer is recycled, long after the pass is
 	// destroyed.
+	pass->resources->command_buffer = pass->command_buffer;
 	wlr_vk_render_pass_set_resources_callback(render_pass, handle_release_resources,
-		gradient_state_ref(pass->gradient_state));
+		pass_resources_ref(pass->resources));
 
 	return &pass->fx_render_pass;
 
@@ -1945,8 +1947,8 @@ offscreen_buffers_get_create_fail:
 	vk_buffer_destroy(pass->render_buffer);
 	pass->render_buffer = NULL;
 buffer_get_fail:
-	gradient_state_unref(vk_renderer, pass->gradient_state);
-gradient_state_fail:
+	pass_resources_unref(vk_renderer, pass->resources);
+resources_fail:
 	free(pass);
 	return NULL;
 }

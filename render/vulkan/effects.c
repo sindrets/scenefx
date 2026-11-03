@@ -19,6 +19,10 @@
 #include "render/vulkan/shaders.h"
 #include "render/vulkan/vulkan.h"
 
+static void effect_images_finish(struct vk_offscreen_buffers *offscreen_buffers,
+		struct vk_renderer *renderer, VkCommandBuffer cb);
+static void blend_ds_destroy(struct vk_renderer *renderer, void *data);
+
 #define EFFECT_IMAGE_FORMAT VK_FORMAT_R16G16B16A16_SFLOAT
 
 // wlroots keeps its equivalent private, so scenefx needs its own.
@@ -38,20 +42,27 @@ int vk_find_mem_type(struct vk_renderer *renderer,
 	return -1;
 }
 
-static void effect_image_finish(struct vk_renderer *renderer,
+static void effect_image_destroy(struct vk_renderer *renderer, void *data);
+
+static void effect_image_finish(struct vk_renderer *renderer, VkCommandBuffer cb,
 		struct vk_effect_image *img) {
-	VkDevice dev = renderer->device;
 	if (img->image == VK_NULL_HANDLE && img->ds == VK_NULL_HANDLE) {
 		return;
 	}
-	// These are only torn down on output reconfigure or shutdown, but the
-	// previous frame's command buffer may still reference the descriptor set,
-	// and freeing one that is in use is invalid. Rare enough that a full idle
-	// wait is cheaper than tracking per-frame lifetimes.
+	// The previous frame's command buffer may still reference the descriptor set,
+	// and freeing one that is in use is invalid. Defer to the resources callback
+	// when a pass is recording; `cb` is VK_NULL_HANDLE only at shutdown, where
+	// there is nothing recording and freeing immediately is correct.
 	//
-	// The wait fails on a lost device; the objects are dead anyway and Vulkan
-	// permits destroying them, so the result is reported but never fatal.
-	vk_renderer_handle_result(renderer, "vkDeviceWaitIdle", vkDeviceWaitIdle(dev));
+	// A lost device fails the wait, but the objects are dead anyway and Vulkan
+	// permits destroying them.
+	vk_deferred_destroy(renderer, cb, effect_image_destroy, img);
+}
+
+static void effect_image_destroy(struct vk_renderer *renderer, void *data) {
+	struct vk_effect_image *img = data;
+	VkDevice dev = renderer->device;
+
 	if (img->ds != VK_NULL_HANDLE) {
 		vk_tex_ds_destroy(renderer, img->ds);
 	}
@@ -63,6 +74,7 @@ static void effect_image_finish(struct vk_renderer *renderer,
 }
 
 static bool effect_image_init(struct vk_renderer *renderer,
+		VkRenderPass render_pass, VkCommandBuffer cb,
 		struct vk_effect_image *img, uint32_t width, uint32_t height) {
 	VkDevice dev = renderer->device;
 	VkResult res;
@@ -132,7 +144,7 @@ static bool effect_image_init(struct vk_renderer *renderer,
 
 	VkFramebufferCreateInfo fb_info = {
 		.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
-		.renderPass = renderer->effect_render_pass,
+		.renderPass = render_pass,
 		.attachmentCount = 1,
 		.pAttachments = &img->view,
 		.width = width,
@@ -156,67 +168,89 @@ static bool effect_image_init(struct vk_renderer *renderer,
 	return true;
 
 error:
-	effect_image_finish(renderer, img);
+	effect_image_finish(renderer, cb, img);
 	return false;
 }
-
-bool vk_effect_images_ensure(struct vk_renderer *renderer,
-		VkRenderPass render_pass, uint32_t width, uint32_t height) {
-	if (render_pass == VK_NULL_HANDLE) {
+bool vk_effect_images_ensure(struct vk_render_pass *pass, VkRenderPass scene_pass,
+		uint32_t width, uint32_t height) {
+	if (scene_pass == VK_NULL_HANDLE) {
 		return false;
 	}
+	struct vk_offscreen_buffers *offscreen_buffers = pass->vk_offscreen_buffers;
+	if (offscreen_buffers == NULL) {
+		return false;
+	}
+	struct vk_renderer *renderer = pass->vk_renderer;
+	VkCommandBuffer cb = pass->command_buffer;
+
 	// Framebuffers are tied to the render pass they were created with, so a
 	// different scene pass (e.g. after an output format change) invalidates them.
-	if (renderer->effect_render_pass != render_pass) {
-		vk_effect_images_finish(renderer);
-		renderer->effect_render_pass = render_pass;
+	if (offscreen_buffers->effect_render_pass != scene_pass) {
+		effect_images_finish(offscreen_buffers, renderer, cb);
+		offscreen_buffers->effect_render_pass = scene_pass;
 	}
 
 	for (size_t i = 0; i < VK_EFFECT_IMAGE_COUNT; i++) {
-		struct vk_effect_image *img = &renderer->effect_images[i];
+		struct vk_effect_image *img = &offscreen_buffers->effect_images[i];
 		if (img->image != VK_NULL_HANDLE &&
 				img->width == width && img->height == height) {
 			continue;
 		}
-		effect_image_finish(renderer, img);
-		if (!effect_image_init(renderer, img, width, height)) {
+		effect_image_finish(renderer, cb, img);
+		if (!effect_image_init(renderer, scene_pass, cb, img, width, height)) {
 			return false;
 		}
 	}
 	return true;
 }
 
-void vk_effect_images_finish(struct vk_renderer *renderer) {
+static void effect_images_finish(struct vk_offscreen_buffers *offscreen_buffers,
+		struct vk_renderer *renderer, VkCommandBuffer cb) {
 	for (size_t i = 0; i < VK_EFFECT_IMAGE_COUNT; i++) {
-		effect_image_finish(renderer, &renderer->effect_images[i]);
+		effect_image_finish(renderer, cb, &offscreen_buffers->effect_images[i]);
 	}
 	// effect_render_pass is owned by wlroots (it is the scene pass); just forget it.
-	renderer->effect_render_pass = VK_NULL_HANDLE;
-	if (renderer->blend_ds != VK_NULL_HANDLE) {
-		vk_tex_ds_destroy(renderer, renderer->blend_ds);
-		renderer->blend_ds = VK_NULL_HANDLE;
-		renderer->blend_ds_view = VK_NULL_HANDLE;
+	offscreen_buffers->effect_render_pass = VK_NULL_HANDLE;
+	if (offscreen_buffers->blend_ds != VK_NULL_HANDLE) {
+		vk_deferred_destroy(renderer, cb, blend_ds_destroy,
+			offscreen_buffers->blend_ds);
+		offscreen_buffers->blend_ds = VK_NULL_HANDLE;
+		offscreen_buffers->blend_ds_view = VK_NULL_HANDLE;
 	}
 }
 
-VkDescriptorSet vk_get_blend_ds(struct vk_renderer *renderer, VkImageView view) {
-	if (view == VK_NULL_HANDLE) {
+void vk_effect_images_finish(struct vk_offscreen_buffers *offscreen_buffers,
+		struct vk_renderer *renderer) {
+	// Called from offscreen_buffers_destroy(), where nothing is recording.
+	effect_images_finish(offscreen_buffers, renderer, VK_NULL_HANDLE);
+}
+
+VkDescriptorSet vk_get_blend_ds(struct vk_render_pass *pass, VkImageView view) {
+	if (view == VK_NULL_HANDLE || pass->vk_offscreen_buffers == NULL) {
 		return VK_NULL_HANDLE;
 	}
+	struct vk_offscreen_buffers *offscreen_buffers = pass->vk_offscreen_buffers;
+	struct vk_renderer *renderer = pass->vk_renderer;
+
 	// The blend image is recreated when the output is reconfigured, so cache
 	// the descriptor set and rebuild it only when the view actually changes.
-	if (renderer->blend_ds != VK_NULL_HANDLE && renderer->blend_ds_view == view) {
-		return renderer->blend_ds;
+	if (offscreen_buffers->blend_ds != VK_NULL_HANDLE &&
+			offscreen_buffers->blend_ds_view == view) {
+		return offscreen_buffers->blend_ds;
 	}
-	if (renderer->blend_ds != VK_NULL_HANDLE) {
-		// Same in-use hazard as effect_image_finish().
-		vk_renderer_handle_result(renderer, "vkDeviceWaitIdle",
-			vkDeviceWaitIdle(renderer->device));
-		vk_tex_ds_destroy(renderer, renderer->blend_ds);
+	if (offscreen_buffers->blend_ds != VK_NULL_HANDLE) {
+		// Deferred, so the replacement does not wait on the device: this happens
+		// whenever a new frame's blend image differs from the cached one.
+		vk_deferred_destroy(renderer, pass->command_buffer,
+			blend_ds_destroy, offscreen_buffers->blend_ds);
 	}
-	renderer->blend_ds = vk_tex_ds_create(renderer, view);
-	renderer->blend_ds_view = renderer->blend_ds != VK_NULL_HANDLE ? view : VK_NULL_HANDLE;
-	return renderer->blend_ds;
+	offscreen_buffers->blend_ds = vk_tex_ds_create(renderer, view);
+	offscreen_buffers->blend_ds_view =
+		offscreen_buffers->blend_ds != VK_NULL_HANDLE ? view : VK_NULL_HANDLE;
+	return offscreen_buffers->blend_ds;
+}
+static void blend_ds_destroy(struct vk_renderer *renderer, void *data) {
+	vk_tex_ds_destroy(renderer, (VkDescriptorSet)data);
 }
 
 void vk_effect_image_prepare_target(VkCommandBuffer cb, struct vk_effect_image *img) {
@@ -248,28 +282,33 @@ void vk_effect_image_prepare_target(VkCommandBuffer cb, struct vk_effect_image *
 	img->layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 }
 
-void vk_mask_view_finish(struct vk_renderer *renderer) {
-	if (renderer->mask_view.view == VK_NULL_HANDLE) {
-		return;
-	}
-	// Same in-use hazard as effect_image_finish(): the previous frame's command
-	// buffer may still sample it, and this only happens when the mask changes.
-	vk_renderer_handle_result(renderer, "vkDeviceWaitIdle",
-		vkDeviceWaitIdle(renderer->device));
-	vkDestroyImageView(renderer->device, renderer->mask_view.view, NULL);
-	renderer->mask_view = (typeof(renderer->mask_view)){0};
+static void mask_view_destroy(struct vk_renderer *renderer, void *data) {
+	vkDestroyImageView(renderer->device, (VkImageView)data, NULL);
 }
 
-VkImageView vk_mask_view_get(struct vk_renderer *renderer, VkImage image,
-		VkFormat format, VkImageLayout *layout) {
-	if (renderer->mask_view.view != VK_NULL_HANDLE &&
-			renderer->mask_view.image == image &&
-			renderer->mask_view.format == format) {
-		*layout = renderer->mask_view.layout;
-		return renderer->mask_view.view;
+void vk_mask_view_finish(struct vk_offscreen_buffers *offscreen_buffers,
+		struct vk_renderer *renderer) {
+	for (size_t i = 0; i < VK_MASK_VIEW_CACHE_LEN; i++) {
+		struct vk_mask_view *entry = &offscreen_buffers->mask_views[i];
+		if (entry->view == VK_NULL_HANDLE) {
+			continue;
+		}
+		vk_deferred_destroy(renderer, VK_NULL_HANDLE, mask_view_destroy, entry->view);
+		*entry = (struct vk_mask_view){0};
 	}
+}
 
-	vk_mask_view_finish(renderer);
+VkImageView vk_mask_view_get(struct vk_offscreen_buffers *offscreen_buffers,
+		struct vk_renderer *renderer, VkCommandBuffer cb, VkImage image,
+		VkFormat format, VkImageLayout *layout) {
+	for (size_t i = 0; i < VK_MASK_VIEW_CACHE_LEN; i++) {
+		struct vk_mask_view *entry = &offscreen_buffers->mask_views[i];
+		if (entry->view != VK_NULL_HANDLE && entry->image == image &&
+				entry->format == format) {
+			*layout = entry->layout;
+			return entry->view;
+		}
+	}
 
 	VkImageViewCreateInfo view_info = {
 		.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
@@ -289,13 +328,141 @@ VkImageView vk_mask_view_get(struct vk_renderer *renderer, VkImage image,
 		return VK_NULL_HANDLE;
 	}
 
-	renderer->mask_view.image = image;
-	renderer->mask_view.format = format;
-	renderer->mask_view.view = view;
+	// Fill the first free slot, or recycle the oldest one. Several mask images
+	// can be live in the same frame (one per layer surface with its own mask),
+	// so a single slot would thrash: each mask change would tear down a view that
+	// the current command buffer still samples.
+	struct vk_mask_view *slot = NULL;
+	for (size_t i = 0; i < VK_MASK_VIEW_CACHE_LEN; i++) {
+		if (offscreen_buffers->mask_views[i].view == VK_NULL_HANDLE) {
+			slot = &offscreen_buffers->mask_views[i];
+			break;
+		}
+	}
+	if (slot == NULL) {
+		slot = &offscreen_buffers->mask_views[offscreen_buffers->mask_views_next];
+		offscreen_buffers->mask_views_next =
+			(offscreen_buffers->mask_views_next + 1) % VK_MASK_VIEW_CACHE_LEN;
+		// Too many distinct masks for the cache: drop the oldest. Clearing the
+		// slot first keeps the recycle path from acting on a freed view, and the
+		// destruction has to be deferred because the command buffer being
+		// recorded right now may still sample it.
+		VkImageView stale = slot->view;
+		*slot = (struct vk_mask_view){0};
+		vk_deferred_destroy(renderer, cb, mask_view_destroy, stale);
+	}
+
+	slot->image = image;
+	slot->format = format;
+	slot->view = view;
 	// wlroots' own view of a scene buffer's image samples it read-only.
-	renderer->mask_view.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-	*layout = renderer->mask_view.layout;
+	slot->layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+	*layout = slot->layout;
 	return view;
+}
+
+// Clear the dummy mask to opaque white and park it in the layout the shader
+// samples it from. This cannot be done as part of a render pass: the image is
+// created in UNDEFINED, so both the layout transition and the clear have to be
+// recorded before any pass binds it, or the descriptor's declared
+// SHADER_READ_ONLY_OPTIMAL layout would not match the image's real one
+// (VUID-vkCmdDraw-None-08114 and friends).
+static bool dummy_mask_initialise(struct vk_renderer *renderer) {
+	VkDevice dev = renderer->device;
+
+	VkCommandPoolCreateInfo pool_info = {
+		.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+		.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,
+		.queueFamilyIndex =
+			wlr_vk_renderer_get_queue_family(renderer->fx_renderer.wlr_renderer),
+	};
+	VkCommandPool pool = VK_NULL_HANDLE;
+	VkResult res = vkCreateCommandPool(dev, &pool_info, NULL, &pool);
+	if (res != VK_SUCCESS) {
+		vk_renderer_handle_result(renderer, "vkCreateCommandPool (dummy mask)", res);
+		return false;
+	}
+
+	VkCommandBufferAllocateInfo alloc_info = {
+		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+		.commandPool = pool,
+		.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+		.commandBufferCount = 1,
+	};
+	VkCommandBuffer cb = VK_NULL_HANDLE;
+	res = vkAllocateCommandBuffers(dev, &alloc_info, &cb);
+	if (res != VK_SUCCESS) {
+		vk_renderer_handle_result(renderer, "vkAllocateCommandBuffers (dummy mask)", res);
+		goto out;
+	}
+
+	VkCommandBufferBeginInfo begin_info = {
+		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+		.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+	};
+	res = vkBeginCommandBuffer(cb, &begin_info);
+	if (res != VK_SUCCESS) {
+		vk_renderer_handle_result(renderer, "vkBeginCommandBuffer (dummy mask)", res);
+		goto out;
+	}
+
+	VkImageSubresourceRange range = {
+		.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+		.levelCount = 1,
+		.layerCount = 1,
+	};
+	VkImageMemoryBarrier barrier = {
+		.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+		.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+		.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+		.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+		.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+		.image = renderer->dummy_mask.image,
+		.subresourceRange = range,
+		.srcAccessMask = 0,
+		.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+	};
+	vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+		VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier);
+
+	// Opaque white: every channel at 1.0, so the shader's alpha-threshold
+	// `discard` can never trigger and `has_mask = 0` draws sample an inert mask.
+	VkClearColorValue white = { .float32 = { 1.0f, 1.0f, 1.0f, 1.0f } };
+	vkCmdClearColorImage(cb, renderer->dummy_mask.image,
+		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &white, 1, &range);
+
+	barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+	barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+	barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+	barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+	vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+		VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier);
+
+	res = vkEndCommandBuffer(cb);
+	if (res != VK_SUCCESS) {
+		vk_renderer_handle_result(renderer, "vkEndCommandBuffer (dummy mask)", res);
+		goto out;
+	}
+
+	VkSubmitInfo submit_info = {
+		.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+		.commandBufferCount = 1,
+		.pCommandBuffers = &cb,
+	};
+	res = vkQueueSubmit(renderer->queue, 1, &submit_info, VK_NULL_HANDLE);
+	if (res != VK_SUCCESS) {
+		vk_renderer_handle_result(renderer, "vkQueueSubmit (dummy mask)", res);
+		goto out;
+	}
+	// The clear has to have landed before anything samples the image.
+	res = vkQueueWaitIdle(renderer->queue);
+	if (res != VK_SUCCESS) {
+		vk_renderer_handle_result(renderer, "vkQueueWaitIdle (dummy mask)", res);
+	}
+
+out:
+	vkDestroyCommandPool(dev, pool, NULL);
+	return res == VK_SUCCESS;
 }
 
 void vk_dummy_mask_finish(struct vk_renderer *renderer) {
@@ -382,6 +549,10 @@ bool vk_dummy_mask_ensure(struct vk_renderer *renderer) {
 		goto error;
 	}
 
+	if (!dummy_mask_initialise(renderer)) {
+		goto error;
+	}
+
 	renderer->dummy_mask.initialised = true;
 	return true;
 
@@ -390,27 +561,42 @@ error:
 	return false;
 }
 
-void vk_saved_pixels_finish(struct vk_renderer *renderer) {
-	if (renderer->saved_pixels.image == VK_NULL_HANDLE) {
-		return;
-	}
-	vk_renderer_handle_result(renderer, "vkDeviceWaitIdle",
-		vkDeviceWaitIdle(renderer->device));
-	vkDestroyImage(renderer->device, renderer->saved_pixels.image, NULL);
-	vkFreeMemory(renderer->device, renderer->saved_pixels.memory, NULL);
-	renderer->saved_pixels.image = VK_NULL_HANDLE;
-	renderer->saved_pixels.memory = VK_NULL_HANDLE;
-	renderer->saved_pixels.initialised = false;
+static void saved_pixels_destroy(struct vk_renderer *renderer, void *data) {
+	struct vk_saved_pixels *saved_pixels = data;
+	vkDestroyImage(renderer->device, saved_pixels->image, NULL);
+	vkFreeMemory(renderer->device, saved_pixels->memory, NULL);
+	*saved_pixels = (struct vk_saved_pixels){0};
 }
 
-bool vk_saved_pixels_ensure(struct vk_renderer *renderer,
+static void saved_pixels_finish(struct vk_renderer *renderer, VkCommandBuffer cb,
+		struct vk_saved_pixels *saved_pixels) {
+	if (saved_pixels->image == VK_NULL_HANDLE) {
+		return;
+	}
+	vk_deferred_destroy(renderer, cb, saved_pixels_destroy, saved_pixels);
+}
+
+void vk_saved_pixels_finish(struct vk_offscreen_buffers *offscreen_buffers,
+		struct vk_renderer *renderer) {
+	// Called from offscreen_buffers_destroy(), where nothing is recording any
+	// more, so the images can go immediately.
+	saved_pixels_finish(renderer, VK_NULL_HANDLE, &offscreen_buffers->saved_pixels);
+}
+
+bool vk_saved_pixels_ensure(struct vk_render_pass *pass,
 		uint32_t width, uint32_t height) {
-	if (renderer->saved_pixels.image != VK_NULL_HANDLE &&
-			renderer->saved_pixels.width == width &&
-			renderer->saved_pixels.height == height) {
+	struct vk_offscreen_buffers *offscreen_buffers = pass->vk_offscreen_buffers;
+	if (offscreen_buffers == NULL) {
+		return false;
+	}
+	struct vk_renderer *renderer = pass->vk_renderer;
+	struct vk_saved_pixels *saved_pixels = &offscreen_buffers->saved_pixels;
+
+	if (saved_pixels->image != VK_NULL_HANDLE && saved_pixels->width == width &&
+			saved_pixels->height == height) {
 		return true;
 	}
-	vk_saved_pixels_finish(renderer);
+	saved_pixels_finish(renderer, pass->command_buffer, saved_pixels);
 
 	VkDevice dev = renderer->device;
 	// Transfer only: this image is never sampled or drawn to, it just holds a
@@ -428,15 +614,14 @@ bool vk_saved_pixels_ensure(struct vk_renderer *renderer,
 		.extent = (VkExtent3D){ width, height, 1 },
 		.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
 	};
-	VkResult res = vkCreateImage(dev, &img_info, NULL,
-		&renderer->saved_pixels.image);
+	VkResult res = vkCreateImage(dev, &img_info, NULL, &saved_pixels->image);
 	if (res != VK_SUCCESS) {
 		vk_renderer_handle_result(renderer, "vkCreateImage", res);
 		return false;
 	}
 
 	VkMemoryRequirements mem_reqs;
-	vkGetImageMemoryRequirements(dev, renderer->saved_pixels.image, &mem_reqs);
+	vkGetImageMemoryRequirements(dev, saved_pixels->image, &mem_reqs);
 	int mem_type = vk_find_mem_type(renderer, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 		mem_reqs.memoryTypeBits);
 	if (mem_type < 0) {
@@ -448,26 +633,24 @@ bool vk_saved_pixels_ensure(struct vk_renderer *renderer,
 		.allocationSize = mem_reqs.size,
 		.memoryTypeIndex = mem_type,
 	};
-	res = vkAllocateMemory(dev, &mem_info, NULL,
-		&renderer->saved_pixels.memory);
+	res = vkAllocateMemory(dev, &mem_info, NULL, &saved_pixels->memory);
 	if (res != VK_SUCCESS) {
 		vk_renderer_handle_result(renderer, "vkAllocateMemory", res);
 		goto error;
 	}
-	res = vkBindImageMemory(dev, renderer->saved_pixels.image,
-		renderer->saved_pixels.memory, 0);
+	res = vkBindImageMemory(dev, saved_pixels->image, saved_pixels->memory, 0);
 	if (res != VK_SUCCESS) {
 		vk_renderer_handle_result(renderer, "vkBindImageMemory", res);
 		goto error;
 	}
 
-	renderer->saved_pixels.width = width;
-	renderer->saved_pixels.height = height;
-	renderer->saved_pixels.initialised = false;
+	saved_pixels->width = width;
+	saved_pixels->height = height;
+	saved_pixels->initialised = false;
 	return true;
 
 error:
-	vk_saved_pixels_finish(renderer);
+	saved_pixels_finish(renderer, pass->command_buffer, saved_pixels);
 	return false;
 }
 
@@ -482,13 +665,8 @@ bool vk_optimized_blur_ensure(struct vk_effect_image *cache,
 		return true;
 	}
 	vk_optimized_blur_finish(cache, renderer);
-	// effect_image_init() only reads renderer->effect_render_pass to create the
-	// framebuffer, and vk_render_pass_add_optimized_blur() always calls
-	// vk_effect_images_ensure() just before this, so the field already holds the
-	// scene pass. Do not assign it here: it is the effect images' identity, and
-	// overwriting it would make vk_effect_images_ensure() skip the rebuild their
-	// own framebuffers may need.
-	if (!effect_image_init(renderer, cache, width, height)) {
+	if (!effect_image_init(renderer, render_pass, VK_NULL_HANDLE, cache,
+			width, height)) {
 		vk_optimized_blur_finish(cache, renderer);
 		return false;
 	}
@@ -500,5 +678,6 @@ void vk_optimized_blur_finish(struct vk_effect_image *cache,
 	if (cache->image == VK_NULL_HANDLE && cache->ds == VK_NULL_HANDLE) {
 		return;
 	}
-	effect_image_finish(renderer, cache);
+	// Only called from offscreen_buffers_destroy(), where nothing is recording.
+	effect_image_finish(renderer, VK_NULL_HANDLE, cache);
 }

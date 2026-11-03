@@ -22,18 +22,18 @@ static inline void free_shaders(struct vk_renderer *vk_renderer) {
 	vk_shader_info_delete(vk_renderer, &vk_renderer->shader_info.blur2);
 	vk_shader_info_delete(vk_renderer, &vk_renderer->shader_info.blur_effects);
 
-	// The effect images' descriptor sets reference the mask views, so they go
-	// before those views and before the pool the sets were allocated from.
-	vk_effect_images_finish(vk_renderer);
-	vk_mask_view_finish(vk_renderer);
+	// The effect images, mask views and saved-pixel snapshots are per output and
+	// torn down with their output's offscreen buffers, in
+	// offscreen_buffers_destroy(). The device is idle by now, so anything they
+	// deferred is safe to free here.
+	vk_deferred_destroy_flush(vk_renderer);
+
+	// 1x1 stand-in mask, shared by every output since it is immutable.
 	vk_dummy_mask_finish(vk_renderer);
 
 	// The blur descriptor pool/layout/sampler must go after every descriptor set
 	// allocated from them, which the effect images own.
 	vk_tex_ds_layout_destroy(vk_renderer);
-	vk_saved_pixels_finish(vk_renderer);
-	// The optimized-blur caches are per output and torn down with their
-	// output's offscreen buffers, in offscreen_buffers_destroy().
 
 	if (vk_renderer->gradient_ds_layout != VK_NULL_HANDLE) {
 		vkDestroyDescriptorSetLayout(vk_renderer->device,
@@ -123,9 +123,14 @@ static void offscreen_buffers_destroy(struct fx_offscreen_buffers *fx_offscreen_
 		wlr_buffer_drop(vk_offscreen_buffers->effects_buffer_swapped->wlr_buffer);
 		vk_offscreen_buffers->effects_buffer_swapped = NULL;
 	}
-	// The optimized-blur cache is a renderer-owned VkImage, not a wlr_buffer.
-	vk_optimized_blur_finish(&vk_offscreen_buffers->optimized_blur,
-		vk_get_renderer(fx_offscreen_buffers->fx_renderer));
+	struct vk_renderer *vk_renderer = vk_get_renderer(fx_offscreen_buffers->fx_renderer);
+
+	// The effect targets, mask views and saved-pixel snapshot are VkImages owned
+	// by this output, not wlr_buffers.
+	vk_effect_images_finish(vk_offscreen_buffers, vk_renderer);
+	vk_mask_view_finish(vk_offscreen_buffers, vk_renderer);
+	vk_saved_pixels_finish(vk_offscreen_buffers, vk_renderer);
+	vk_optimized_blur_finish(&vk_offscreen_buffers->optimized_blur, vk_renderer);
 
 	free(vk_offscreen_buffers);
 }
@@ -231,6 +236,7 @@ struct fx_renderer *vk_renderer_create(struct wlr_renderer *wlr_renderer) {
 	}
 
 	wl_list_init(&vk_renderer->buffers);
+	wl_list_init(&vk_renderer->deferred_destroys);
 
 	vk_renderer->device = wlr_vk_renderer_get_device(wlr_renderer);
 	vk_renderer->physical_device = wlr_vk_renderer_get_physical_device(wlr_renderer);

@@ -16,6 +16,7 @@ glslang_version = glslang_version_info.split('\n')[0].split(':')[-1]
 
 scenefx_files += files(
 	'buffer.c',
+	'deferred_destroy.c',
 	'effects.c',
 	'pass.c',
 	'pipeline.c',
