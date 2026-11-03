@@ -470,8 +470,10 @@ void vk_dummy_mask_finish(struct vk_renderer *renderer) {
 	if (renderer->dummy_mask.image == VK_NULL_HANDLE) {
 		return;
 	}
-	// Same in-use hazard as effect_image_finish(): a previous frame's command
-	// buffer may still sample it, and this only happens at shutdown.
+	// Only reached from fx_renderer's renderer-destroy handler, which wlroots
+	// emits before its own vkDeviceWaitIdle() and while nothing is recording, so
+	// an idle here really does order the preceding frames' command buffers. A
+	// wait would be the wrong tool mid-frame - see vk_deferred_destroy().
 	vk_renderer_handle_result(renderer, "vkDeviceWaitIdle", vkDeviceWaitIdle(dev));
 	vkDestroyImageView(dev, renderer->dummy_mask.view, NULL);
 	vkDestroyImage(dev, renderer->dummy_mask.image, NULL);
