@@ -9,12 +9,18 @@ vulkan_shaders_src = [
 	'tex.frag',
 ]
 
+# Shader snippets pulled in with #include by the fragment shaders above. They are
+# Vulkan-only: the GLES2 renderer embeds its own copies through embed.sh.
+vulkan_shader_includes = files(
+	'corner_alpha.glsl',
+	'gradient.glsl',
+)
+
 vulkan_shaders = []
 foreach shader : vulkan_shaders_src
 	name = shader.underscorify() + '_data'
 	args = [
 		glslang,
-		'-I' + common_shaders_path,
 		'-V', '@INPUT@',
 		'-o', '@OUTPUT@',
 		'--vn', name,
@@ -28,7 +34,7 @@ foreach shader : vulkan_shaders_src
 		output: shader + '.h',
 		input: shader,
 		command: args,
-		depend_files: common_shaders,
+		depend_files: vulkan_shader_includes,
 	)
 
 	vulkan_shaders += [header]
