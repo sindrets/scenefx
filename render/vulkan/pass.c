@@ -328,14 +328,6 @@ static void blur_padding_copy(struct fx_render_pass *fx_pass,
 	}
 }
 
-static void vk_render_pass_read_to_buffer(struct fx_render_pass *fx_pass,
-		const pixman_region32_t *_region, struct wlr_buffer *dst_buffer,
-		struct wlr_buffer *src_buffer) {
-	// Unused by the Vulkan path: the blur padding snapshot is kept in a
-	// renderer-owned VkImage rather than a wlr_buffer, so save/apply above copy
-	// directly instead of going through this wlr_buffer-oriented entry point.
-}
-
 static void vk_render_pass_save_blur_region(struct fx_render_pass *fx_pass) {
 	blur_padding_copy(fx_pass, &fx_pass->blur_padding_region, true);
 }
@@ -1849,7 +1841,6 @@ static const struct fx_render_pass_impl render_pass_impl = {
 	.add_box_shadow = vk_render_pass_add_box_shadow,
 	.add_blur = vk_render_pass_add_blur,
 	.add_optimized_blur = vk_render_pass_add_optimized_blur,
-	.read_to_buffer = vk_render_pass_read_to_buffer,
 	.save_blur_region = vk_render_pass_save_blur_region,
 	.apply_saved_blur_region = vk_render_pass_apply_saved_blur_region,
 };
@@ -1933,26 +1924,6 @@ struct fx_render_pass *vk_render_pass_init(struct fx_renderer *fx_renderer,
 		goto offscreen_buffers_get_create_fail;
 	}
 
-	// Update the buffers if needed
-	const int width = pass->render_buffer->wlr_buffer->width;
-	const int height = pass->render_buffer->wlr_buffer->height;
-	bool failed = false;
-	vk_buffer_get_or_allocate(fx_renderer, output->allocator, width, height, false,
-			&pass->vk_offscreen_buffers->blur_saved_pixels_buffer, &failed);
-	vk_buffer_get_or_allocate(fx_renderer, output->allocator, width, height, true,
-			&pass->vk_offscreen_buffers->effects_buffer, &failed);
-	vk_buffer_get_or_allocate(fx_renderer, output->allocator, width, height, true,
-			&pass->vk_offscreen_buffers->effects_buffer_swapped, &failed);
-	vk_buffer_get_or_allocate(fx_renderer, output->allocator, width, height, false,
-			&pass->vk_offscreen_buffers->optimized_blur_buffer, &failed);
-	vk_buffer_get_or_allocate(fx_renderer, output->allocator, width, height, false,
-			&pass->vk_offscreen_buffers->optimized_no_blur_buffer, &failed);
-
-	if (failed) {
-		wlr_log(WLR_ERROR, "Failed to create effect framebuffers");
-		goto offscreen_buffer_allocate_fail;
-	}
-
 	// One extra reference for the command buffer's resource callback: wlroots
 	// calls it once the command buffer is recycled, long after the pass is
 	// destroyed.
@@ -1962,8 +1933,6 @@ struct fx_render_pass *vk_render_pass_init(struct fx_renderer *fx_renderer,
 
 	return &pass->fx_render_pass;
 
-offscreen_buffer_allocate_fail:
-	fx_offscreen_buffers_destroy(&pass->vk_offscreen_buffers->fx_offscreen_buffers);
 offscreen_buffers_get_create_fail:
 	vk_buffer_destroy(pass->render_buffer);
 	pass->render_buffer = NULL;

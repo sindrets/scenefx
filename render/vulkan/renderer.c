@@ -101,28 +101,8 @@ error:
 }
 
 static void offscreen_buffers_destroy(struct fx_offscreen_buffers *fx_offscreen_buffers) {
-	struct vk_offscreen_buffers *vk_offscreen_buffers = vk_get_offscreen_buffers(fx_offscreen_buffers);
-	// Make sure to free the buffers
-	if (vk_offscreen_buffers->optimized_blur_buffer != NULL) {
-		wlr_buffer_drop(vk_offscreen_buffers->optimized_blur_buffer->wlr_buffer);
-		vk_offscreen_buffers->optimized_blur_buffer = NULL;
-	}
-	if (vk_offscreen_buffers->optimized_no_blur_buffer != NULL) {
-		wlr_buffer_drop(vk_offscreen_buffers->optimized_no_blur_buffer->wlr_buffer);
-		vk_offscreen_buffers->optimized_no_blur_buffer = NULL;
-	}
-	if (vk_offscreen_buffers->blur_saved_pixels_buffer != NULL) {
-		wlr_buffer_drop(vk_offscreen_buffers->blur_saved_pixels_buffer->wlr_buffer);
-		vk_offscreen_buffers->blur_saved_pixels_buffer = NULL;
-	}
-	if (vk_offscreen_buffers->effects_buffer != NULL) {
-		wlr_buffer_drop(vk_offscreen_buffers->effects_buffer->wlr_buffer);
-		vk_offscreen_buffers->effects_buffer = NULL;
-	}
-	if (vk_offscreen_buffers->effects_buffer_swapped != NULL) {
-		wlr_buffer_drop(vk_offscreen_buffers->effects_buffer_swapped->wlr_buffer);
-		vk_offscreen_buffers->effects_buffer_swapped = NULL;
-	}
+	struct vk_offscreen_buffers *vk_offscreen_buffers =
+		vk_get_offscreen_buffers(fx_offscreen_buffers);
 	struct vk_renderer *vk_renderer = vk_get_renderer(fx_offscreen_buffers->fx_renderer);
 
 	// The effect targets, mask views and saved-pixel snapshot are VkImages owned

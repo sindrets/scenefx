@@ -80,19 +80,13 @@ struct vk_mask_view {
 struct vk_offscreen_buffers {
 	struct fx_offscreen_buffers fx_offscreen_buffers;
 
-	// Contains the blurred background for tiled windows
-	struct vk_buffer *optimized_blur_buffer;
-	// Contains the non-blurred background for tiled windows. Used for blurring
-	// optimized surfaces with an alpha. Just as inefficient as the regular blur.
-	struct vk_buffer *optimized_no_blur_buffer;
-	// Contains the original pixels to draw over the areas where artifacts are
-	// visible
-	struct vk_buffer *blur_saved_pixels_buffer;
-	// Blur swaps between the two effects buffers every time it scales the image
-	// Buffer used for effects
-	struct vk_buffer *effects_buffer;
-	// Swap buffer used for effects
-	struct vk_buffer *effects_buffer_swapped;
+	// The Vulkan renderer keeps none of GLES2's intermediate wlr_buffers. Blur
+	// ping-pongs between two 16F effect images instead (effect_images below), the
+	// blur-padding snapshot is a VkImage (saved_pixels), and the optimized-blur
+	// cache is a 16F effect image too. Copying the 16F chain output into an 8-bit
+	// wlr_buffer would not even be expressible with vkCmdCopyImage, and the
+	// unblurred copy GLES2 keeps for reduced-strength optimized blur is
+	// unnecessary here: re-blurring the live blend image is the same content.
 
 	// Backing store for the optimized blur cache, the Vulkan counterpart of
 	// GLES2's optimized_blur_buffer: the blurred bottom layer for this output.
