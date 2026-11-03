@@ -22,6 +22,11 @@ struct vk_pipelines {
 	struct vk_pipeline_blur *blur1;
 	struct vk_pipeline_blur *blur2;
 	struct vk_pipeline_blur *blur_effects;
+	// Same shader as blur_effects but with blending disabled. The optimized-blur
+	// cache is written into an attachment the pass does not clear, so it has to
+	// replace its contents; blending there would accumulate translucent content
+	// frame over frame.
+	struct vk_pipeline_blur *blur_effects_replace;
 };
 
 

@@ -15,7 +15,8 @@ void vk_pipelines_init(struct vk_renderer *renderer, struct vk_render_setup *set
 	// passes render into offscreen images whose framebuffers deliberately reuse
 	// that same pass (see effects.c). An effect-free pass never runs them.
 	if (!create_vk_blur_pipelines(renderer, setup, &out_pipelines->blur1,
-			&out_pipelines->blur2, &out_pipelines->blur_effects)) {
+			&out_pipelines->blur2, &out_pipelines->blur_effects,
+			&out_pipelines->blur_effects_replace)) {
 		wlr_log(WLR_ERROR, "Could not create blur pipelines");
 	}
 }
@@ -27,4 +28,5 @@ void vk_pipelines_destroy(struct vk_renderer *renderer, struct vk_pipelines *pip
 	delete_vk_blur_pipelines(renderer, pipelines->blur1);
 	delete_vk_blur_pipelines(renderer, pipelines->blur2);
 	delete_vk_blur_pipelines(renderer, pipelines->blur_effects);
+	delete_vk_blur_pipelines(renderer, pipelines->blur_effects_replace);
 }

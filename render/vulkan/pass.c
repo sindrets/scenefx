@@ -1445,6 +1445,12 @@ static bool render_blur_into_cache(struct vk_render_pass *pass,
 	if (rects_len == 0) {
 		return true;
 	}
+	// The cache is written with the replace variant: the effect pass does not
+	// clear its attachment, so a blending pipeline would accumulate translucent
+	// content in the cache frame after frame.
+	if (pipelines->blur_effects_replace == NULL) {
+		return false;
+	}
 
 	vk_effect_image_prepare_target(cb, cache);
 
@@ -1494,7 +1500,7 @@ static bool render_blur_into_cache(struct vk_render_pass *pass,
 	}
 
 	vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
-		pipelines->blur_effects->pipeline.pipeline);
+		pipelines->blur_effects_replace->pipeline.pipeline);
 	vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout,
 		0, 1, &src_ds, 0, NULL);
 	vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_VERTEX_BIT,

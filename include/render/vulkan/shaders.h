@@ -230,7 +230,8 @@ bool vk_shader_info_create_blur_effects(struct vk_renderer *renderer);
 
 bool create_vk_blur_pipelines(struct vk_renderer *renderer, struct vk_render_setup *setup,
 		struct vk_pipeline_blur **out_blur1, struct vk_pipeline_blur **out_blur2,
-		struct vk_pipeline_blur **out_blur_effects);
+		struct vk_pipeline_blur **out_blur_effects,
+		struct vk_pipeline_blur **out_blur_effects_replace);
 void delete_vk_blur_pipelines(struct vk_renderer *renderer, struct vk_pipeline_blur *blur);
 
 #endif // !_RENDERER_VULKAN_SHADERS_H

@@ -1158,20 +1158,26 @@ static struct vk_pipeline_blur *create_one_blur_pipeline(struct vk_renderer *ren
 
 bool create_vk_blur_pipelines(struct vk_renderer *renderer, struct vk_render_setup *setup,
 		struct vk_pipeline_blur **out_blur1, struct vk_pipeline_blur **out_blur2,
-		struct vk_pipeline_blur **out_blur_effects) {
+		struct vk_pipeline_blur **out_blur_effects,
+		struct vk_pipeline_blur **out_blur_effects_replace) {
 	*out_blur1 = create_one_blur_pipeline(renderer, setup,
 			&renderer->shader_info.blur1, false);
 	*out_blur2 = create_one_blur_pipeline(renderer, setup,
 			&renderer->shader_info.blur2, false);
 	*out_blur_effects = create_one_blur_pipeline(renderer, setup,
 			&renderer->shader_info.blur_effects, true);
+	*out_blur_effects_replace = create_one_blur_pipeline(renderer, setup,
+			&renderer->shader_info.blur_effects, false);
 
-	if (*out_blur1 == NULL || *out_blur2 == NULL || *out_blur_effects == NULL) {
+	if (*out_blur1 == NULL || *out_blur2 == NULL || *out_blur_effects == NULL ||
+			*out_blur_effects_replace == NULL) {
 		wlr_log(WLR_ERROR, "Could not create blur shader pipelines");
 		delete_vk_blur_pipelines(renderer, *out_blur1);
 		delete_vk_blur_pipelines(renderer, *out_blur2);
 		delete_vk_blur_pipelines(renderer, *out_blur_effects);
-		*out_blur1 = *out_blur2 = *out_blur_effects = NULL;
+		delete_vk_blur_pipelines(renderer, *out_blur_effects_replace);
+		*out_blur1 = *out_blur2 = NULL;
+		*out_blur_effects = *out_blur_effects_replace = NULL;
 		return false;
 	}
 	return true;
