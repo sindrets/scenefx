@@ -1,21 +1,24 @@
 #include <assert.h>
-#include <wlr/config.h>
 #include <wlr/util/log.h>
 #include <wlr/render/interface.h>
-#if WLR_HAS_GLES2_RENDERER
+/* SCENEFX_HAS_*, deliberately not wlroots' WLR_HAS_*: the latter describe how
+ * wlroots was built, while scenefx may have skipped a renderer that wlroots has
+ * (see the wlroots_has_fx_api check in meson.build). */
+#include "scenefx-config.h"
+#if SCENEFX_HAS_GLES2_RENDERER
 #include <wlr/render/gles2.h>
 #endif
-#if WLR_HAS_VULKAN_RENDERER
+#if SCENEFX_HAS_VULKAN_RENDERER
 #include <wlr/render/vulkan.h>
 #endif
 
 #include "render/fx_renderer.h"
 #include "render/tracy.h"
 #include "scenefx/scenefx.h"
-#if WLR_HAS_GLES2_RENDERER
+#if SCENEFX_HAS_GLES2_RENDERER
 #include "render/gles2/gles2.h"
 #endif
-#if WLR_HAS_VULKAN_RENDERER
+#if SCENEFX_HAS_VULKAN_RENDERER
 #include "render/vulkan/vulkan.h"
 #endif
 
@@ -105,7 +108,7 @@ struct fx_renderer *scenefx_init_from_wlr_renderer(struct wlr_renderer *wlr_rend
 		struct wlr_scene *wlr_scene) {
 	assert(wlr_renderer);
 
-#define HAS_ANY_RENDERERS (WLR_HAS_GLES2_RENDERER || WLR_HAS_VULKAN_RENDERER)
+#define HAS_ANY_RENDERERS (SCENEFX_HAS_GLES2_RENDERER || SCENEFX_HAS_VULKAN_RENDERER)
 #if !HAS_ANY_RENDERERS
 	wlr_log(WLR_ERROR,
 			"Could not initialize SceneFX as it wasn't compiled with any renderers. "
@@ -114,13 +117,13 @@ struct fx_renderer *scenefx_init_from_wlr_renderer(struct wlr_renderer *wlr_rend
 #else
 	struct fx_renderer *fx_renderer = NULL;
 
-#if WLR_HAS_GLES2_RENDERER
+#if SCENEFX_HAS_GLES2_RENDERER
 	if (wlr_renderer_is_gles2(wlr_renderer)) {
 		fx_renderer = gles2_renderer_create(wlr_renderer);
 		goto renderer_created;
 	}
 #endif
-#if WLR_HAS_VULKAN_RENDERER
+#if SCENEFX_HAS_VULKAN_RENDERER
 	if (wlr_renderer_is_vk(wlr_renderer)) {
 		fx_renderer = vk_renderer_create(wlr_renderer);
 		goto renderer_created;

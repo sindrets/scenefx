@@ -90,34 +90,80 @@ wayland_server = dependency('wayland-server',
 
 wlroots_options = [ 'examples=false' ]
 wlroots_version = ['>=0.20.0', '<0.21.0']
-# Prefer the wlroots-vkfx fork when installed: the Vulkan FX renderer needs
-# the render pass internals that it exports.
+# The Vulkan FX renderer needs wlroots entry points that upstream does not
+# export - wlr_vk_render_pass_suspend/resume() and the blend-image getters, which
+# let a consumer render into the frame in progress.
+#
+# Upstream wlroots is still accepted (the GLES2 renderer works with it), but
+# whether it has the extra API decides if the Vulkan renderer can be built.
+# Check dependency compatibility by linking against the entry points we need.
+wlroots_has_fx_api_code = '''
+#define WLR_USE_UNSTABLE
+#include <wlr/render/wlr_renderer.h>
+#include <wlr/render/pass.h>
+#include <wlr/render/vulkan.h>
+int main(void) {
+	void *p = (void*)wlr_vk_render_pass_get_blend_image;
+	return p == 0;
+}
+'''
 
 wlroots = dependency('wlroots-vkfx-0.20',
 	version: wlroots_version,
 	default_options: wlroots_options,
 	required: false,
 )
-if not wlroots.found()
-	wlroots = dependency('wlroots-0.20',
-		version: wlroots_version,
-		default_options: wlroots_options,
-		required: false,
+upstream_wlroots = dependency('wlroots-0.20',
+	version: wlroots_version,
+	default_options: wlroots_options,
+	required: false,
+)
+
+if wlroots.found()
+	wlroots_has_fx_api = true
+elif upstream_wlroots.found()
+	wlroots = upstream_wlroots
+	wlroots_has_fx_api = cc.links(wlroots_has_fx_api_code,
+		dependencies: wlroots,
+		name: 'wlroots Vulkan FX entry points',
 	)
-endif
-if not wlroots.found()
+else
 	wlroots_proj = subproject(
 		'wlroots',
 		default_options: wlroots_options,
 		version: wlroots_version,
 	)
 	wlroots = wlroots_proj.get_variable('wlroots')
+	wlroots_has_fx_api = cc.links(wlroots_has_fx_api_code,
+		dependencies: wlroots,
+		name: 'wlroots Vulkan FX entry points',
+	)
 endif
 
+# wlroots publishes these feature flags only in the .pc file it installs; the
+# -uninstalled.pc generated for a build tree carries no variables at all. A
+# missing flag therefore means "cannot tell", and defaults to yes: pointing
+# PKG_CONFIG_PATH at a wlroots build tree used to disable both renderers and then
+# fail somewhere unrelated in render/meson.build. An installed wlroots always has
+# the flags, so a genuine "not built" is still honoured.
+#
+# The Vulkan renderer additionally needs the fork's FX entry points, whatever the
+# flags say: a wlroots without them compiles the GLES2 renderer happily but not
+# render/vulkan, so gate it here rather than at link time.
 renderers = {
-	'gles2': wlroots.get_variable('have_gles2_renderer') == 'true',
-	'vulkan': wlroots.get_variable('have_vulkan_renderer') == 'true',
+	'gles2': wlroots.get_variable('have_gles2_renderer',
+		default_value: 'true') == 'true',
+	'vulkan': wlroots_has_fx_api and
+		wlroots.get_variable('have_vulkan_renderer',
+			default_value: 'true') == 'true',
 }
+
+if not wlroots_has_fx_api and not get_option('auto_features').disabled()
+	warning('wlroots does not export the Vulkan FX entry points, so the Vulkan ' +
+		'renderer will not be built. Install the fork from ' +
+		'https://github.com/sindrets/wlroots-vkfx (pkg-config name ' +
+		'wlroots-vkfx-0.20) and point PKG_CONFIG_PATH at it to enable it.')
+endif
 
 drm = dependency('libdrm',
 	version: '>=2.4.129',
@@ -192,7 +238,9 @@ subdir('util')
 
 subdir('include')
 
-scenefx_inc = include_directories('include')
+# '.' picks up the build directory as well as the source directory, so the
+# generated scenefx-config.h is reachable as "scenefx-config.h".
+scenefx_inc = include_directories('.', 'include')
 
 lib_scenefx = library(
 	versioned_name, scenefx_files,
