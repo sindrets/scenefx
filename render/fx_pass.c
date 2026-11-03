@@ -21,10 +21,13 @@ void fx_render_pass_collect_gpu_zones(struct fx_render_pass *render_pass) {
 }
 
 void fx_render_pass_destroy(struct fx_render_pass *render_pass) {
-	render_pass->impl->destroy(render_pass);
-
+	// Tidy up the shared state first: impl->destroy() is free() for both the
+	// GLES2 and the Vulkan pass, so anything touched afterwards is a
+	// use-after-free.
 	pixman_region32_fini(&render_pass->blur_padding_region);
 	render_pass->has_blur = false;
+
+	render_pass->impl->destroy(render_pass);
 }
 
 void fx_render_pass_add_texture(struct fx_render_pass *render_pass,
