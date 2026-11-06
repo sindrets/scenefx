@@ -65,12 +65,21 @@ float rounded_box_coverage(vec4 edges, vec2 size, vec2 position,
 	return cov * (1.0 - corner_sdf(size, position, radius_tl, radius_tr, radius_bl, radius_br));
 }
 
-// Inverse of rounded_box_coverage(): 1.0 where the shape can be seen, 0.0
-// inside it, blended across pixels its edges only partly cover.
+// Inverse of rounded_box_coverage(), but binary: 0.0 only where the shape
+// covers the whole pixel, 1.0 everywhere else.
+//
+// A hole must not fade. The shape drawn inside it (a client surface, say) fades
+// across the very pixels the hole's edge passes through, and if the hole faded
+// there too the two fades would compose: the pixel would be left with exactly
+// c*(1-c) of whatever sits behind the hole, so the background bleeds through
+// the seam between border and surface. A straight hole edge is snapped to whole
+// pixels instead (clipped_fregion_cover_area()), but a rounded one cannot be
+// snapped without flattening the arc, so it is cut hard here and the shape on
+// top alone provides the antialiasing.
 float cutout_coverage(vec4 edges, vec2 size, vec2 position,
 		float radius_tl, float radius_tr, float radius_bl, float radius_br) {
-	return 1.0 - rounded_box_coverage(edges, size, position,
-		radius_tl, radius_tr, radius_bl, radius_br);
+	return rounded_box_coverage(edges, size, position,
+		radius_tl, radius_tr, radius_bl, radius_br) >= 1.0 ? 0.0 : 1.0;
 }
 
 // Note: Returns 0.0 if outside, 1.0 if inside the bounds. The is_cutout parameter
