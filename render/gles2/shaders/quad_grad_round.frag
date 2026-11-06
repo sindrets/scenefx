@@ -9,6 +9,8 @@ precision mediump float;
 varying vec4 v_color;
 varying vec2 v_texcoord;
 
+uniform vec4 rect_box_edges;
+
 uniform vec2 size;
 uniform vec2 position;
 
@@ -28,15 +30,17 @@ uniform int count;
 
 vec4 gradient(vec4 colors[LEN], int count, vec2 size, vec2 grad_box, vec2 origin, float degree, bool linear, bool blend);
 
-float corner_alpha(vec2 size, vec2 position, bool is_cutout,
+float box_coverage(vec4 edges);
+float rounded_box_coverage(vec4 edges, vec2 size, vec2 position,
+		float radius_tl, float radius_tr, float radius_bl, float radius_br);
+float cutout_coverage(vec4 edges, vec2 size, vec2 position,
 		float radius_tl, float radius_tr, float radius_bl, float radius_br);
 
-// TODO:
 void main() {
-	float quad_corner_alpha = corner_alpha(
-		size - 1.0,
-		position + 0.5,
-		false,
+	float quad_corner_alpha = rounded_box_coverage(
+		rect_box_edges,
+		size,
+		position,
 		radius_top_left,
 		radius_top_right,
 		radius_bottom_left,

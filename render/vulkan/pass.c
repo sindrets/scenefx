@@ -92,28 +92,36 @@ static void render_pass_mark_box_updated(struct vk_render_pass *pass,
 	pixman_region32_fini(&region);
 }
 
+// Shrink the hole to the pixels it fully covers before subtracting it from the
+// clip region. Partially covered boundary pixels are left to the shader, which
+// antialiases the hole's exact edges; subtracting them here would cut the
+// coverage the shader computes for them back to zero.
 static bool apply_clip_region(pixman_region32_t *clip_region,
-		const struct wlr_box *clipped_region_box, const struct fx_corner_fradii *corners) {
-	if (!wlr_box_empty(clipped_region_box)) {
-		float top = fmax(corners->top_left, corners->top_right);
-		float bottom = fmax(corners->bottom_left, corners->bottom_right);
-		float left = fmax(corners->top_left, corners->bottom_left);
-		float right = fmax(corners->top_right, corners->bottom_right);
-
-		pixman_region32_t user_clip_region;
-		pixman_region32_init_rect(
-			&user_clip_region,
-			clipped_region_box->x + (left * 0.3),
-			clipped_region_box->y + (top * 0.3),
-			fmax(clipped_region_box->width - (left + right) * 0.3, 0),
-			fmax(clipped_region_box->height - (top + bottom) * 0.3, 0)
-		);
-		pixman_region32_subtract(clip_region, clip_region, &user_clip_region);
-		pixman_region32_fini(&user_clip_region);
-		return true;
+		const struct clipped_fregion *fregion) {
+	if (wlr_box_empty(&fregion->area)) {
+		return false;
 	}
 
-	return false;
+	const struct fx_corner_fradii *corners = &fregion->corners;
+	struct wlr_fbox area = clipped_fregion_frac_area(fregion);
+
+	float top = fmax(corners->top_left, corners->top_right);
+	float bottom = fmax(corners->bottom_left, corners->bottom_right);
+	float left = fmax(corners->top_left, corners->bottom_left);
+	float right = fmax(corners->top_right, corners->bottom_right);
+
+	int x1 = ceil(area.x + left * 0.3);
+	int y1 = ceil(area.y + top * 0.3);
+	int x2 = floor(area.x + area.width - right * 0.3);
+	int y2 = floor(area.y + area.height - bottom * 0.3);
+
+	pixman_region32_t user_clip_region;
+	pixman_region32_init_rect(&user_clip_region, x1, y1,
+		x2 > x1 ? x2 - x1 : 0, y2 > y1 ? y2 - y1 : 0);
+	pixman_region32_subtract(clip_region, clip_region, &user_clip_region);
+	pixman_region32_fini(&user_clip_region);
+
+	return true;
 }
 
 static void push_rounding_data(struct vk_shader_rounding_data *data,
@@ -128,6 +136,26 @@ static void push_rounding_data(struct vk_shader_rounding_data *data,
 			.bottom_right = corners->bottom_right,
 		},
 	};
+}
+
+// Fractional counterpart of push_rounding_data(): same shape, but the exact
+// unrounded edges are kept so the shader can antialias a box that does not land
+// on the pixel grid. Falls back to the rounded box when the caller passed no
+// fractional edges.
+static void push_frac_rounding_data(struct vk_shader_rounding_data *data,
+		const struct wlr_box *box, const struct wlr_fbox *frac_box,
+		const struct fx_corner_fradii *corners) {
+	push_rounding_data(data, box, corners);
+
+	if (frac_box == NULL || wlr_fbox_empty(frac_box)) {
+		return;
+	}
+
+	data->edges_valid = 1.0f;
+	data->edges[0] = frac_box->x;
+	data->edges[1] = frac_box->y;
+	data->edges[2] = frac_box->x + frac_box->width;
+	data->edges[3] = frac_box->y + frac_box->height;
 }
 
 // Draw the currently bound pipeline over every rect of the clip region.
@@ -382,8 +410,7 @@ static void vk_render_pass_add_rect(struct fx_render_pass *fx_pass,
 
 	pixman_region32_t clip_region;
 	get_clip_region(pass, options->clip, &clip_region);
-	apply_clip_region(&clip_region,
-		&fx_options->clipped_region.area, &fx_options->clipped_region.corners);
+	apply_clip_region(&clip_region, &fx_options->clipped_region);
 
 	const bool should_clip = clipped_fregion_is_valid(&fx_options->clipped_region);
 
@@ -423,9 +450,12 @@ static void vk_render_pass_add_rect(struct fx_render_pass *fx_pass,
 	struct vk_frag_quad_pcr_data quad_pcr_data = {
 		.color = { linear_color[0], linear_color[1], linear_color[2], linear_color[3] },
 	};
-	push_rounding_data(&quad_pcr_data.corner_rounding, &box, &(struct fx_corner_fradii){ 0 });
-	push_rounding_data(&quad_pcr_data.clipping,
-		&fx_options->clipped_region.area, &fx_options->clipped_region.corners);
+	push_frac_rounding_data(&quad_pcr_data.corner_rounding, &box, &fx_options->frac_box,
+		&(struct fx_corner_fradii){ 0 });
+	struct wlr_fbox clipped_frac_area = clipped_fregion_frac_area(&fx_options->clipped_region);
+	push_frac_rounding_data(&quad_pcr_data.clipping,
+		&fx_options->clipped_region.area, &clipped_frac_area,
+		&fx_options->clipped_region.corners);
 
 	bind_pipeline(pass, pipeline->pipeline);
 	vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_VERTEX_BIT,
@@ -467,8 +497,7 @@ static void vk_render_pass_add_rounded_rect(struct fx_render_pass *fx_pass,
 
 	pixman_region32_t clip_region;
 	get_clip_region(pass, options->clip, &clip_region);
-	apply_clip_region(&clip_region,
-		&fx_options->clipped_region.area, &fx_options->clipped_region.corners);
+	apply_clip_region(&clip_region, &fx_options->clipped_region);
 
 	const bool should_round_corners = !fx_corner_fradii_is_empty(&fx_options->corners);
 	const bool should_clip = clipped_fregion_is_valid(&fx_options->clipped_region);
@@ -508,9 +537,13 @@ static void vk_render_pass_add_rounded_rect(struct fx_render_pass *fx_pass,
 	struct vk_frag_quad_pcr_data quad_pcr_data = {
 		.color = { linear_color[0], linear_color[1], linear_color[2], linear_color[3] },
 	};
-	push_rounding_data(&quad_pcr_data.corner_rounding, &box, &fx_options->corners);
-	push_rounding_data(&quad_pcr_data.clipping,
-		&fx_options->clipped_region.area, &fx_options->clipped_region.corners);
+	push_frac_rounding_data(&quad_pcr_data.corner_rounding, &box, &fx_options->frac_box,
+		&fx_options->corners);
+	struct wlr_fbox rounded_clipped_frac_area =
+		clipped_fregion_frac_area(&fx_options->clipped_region);
+	push_frac_rounding_data(&quad_pcr_data.clipping,
+		&fx_options->clipped_region.area, &rounded_clipped_frac_area,
+		&fx_options->clipped_region.corners);
 
 	bind_pipeline(pass, pipeline->pipeline);
 	vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_VERTEX_BIT,
@@ -760,6 +793,7 @@ static void vk_render_pass_add_grad_common(struct vk_render_pass *pass,
 		const struct wlr_render_rect_options *options,
 		const struct fx_gradient *gradient, enum fx_quad_shader_effects effects,
 		const struct fx_corner_fradii *corners,
+		const struct wlr_fbox *frac_box,
 		const struct clipped_fregion *clipped_region) {
 	struct vk_renderer *vk_renderer = pass->vk_renderer;
 	VkCommandBuffer cb = pass->command_buffer;
@@ -770,7 +804,7 @@ static void vk_render_pass_add_grad_common(struct vk_render_pass *pass,
 	pixman_region32_t clip_region;
 	get_clip_region(pass, options->clip, &clip_region);
 	if (clipped_region != NULL) {
-		apply_clip_region(&clip_region, &clipped_region->area, &clipped_region->corners);
+		apply_clip_region(&clip_region, clipped_region);
 	}
 
 	struct vk_pipeline *pipeline = get_vk_quad_grad_pipeline(
@@ -802,11 +836,12 @@ static void vk_render_pass_add_grad_common(struct vk_render_pass *pass,
 		.color = { 1.0f, 1.0f, 1.0f, 1.0f },
 	};
 	if (corners != NULL) {
-		push_rounding_data(&quad_pcr_data.corner_rounding, &box, corners);
+		push_frac_rounding_data(&quad_pcr_data.corner_rounding, &box, frac_box, corners);
 	}
 	if (clipped_region != NULL) {
-		push_rounding_data(&quad_pcr_data.clipping,
-			&clipped_region->area, &clipped_region->corners);
+		struct wlr_fbox clipped_frac_area = clipped_fregion_frac_area(clipped_region);
+		push_frac_rounding_data(&quad_pcr_data.clipping,
+			&clipped_region->area, &clipped_frac_area, &clipped_region->corners);
 	}
 
 	if (!bind_gradient(pass, layout, gradient)) {
@@ -830,7 +865,7 @@ static void vk_render_pass_add_rect_grad(struct fx_render_pass *fx_pass,
 	struct vk_render_pass *pass = vk_get_render_pass(fx_pass);
 
 	vk_render_pass_add_grad_common(pass, &fx_options->base, &fx_options->gradient,
-		SHADER_QUAD_EFFECT_NONE, NULL, NULL);
+		SHADER_QUAD_EFFECT_NONE, NULL, &fx_options->frac_box, NULL);
 }
 
 static void vk_render_pass_add_rounded_rect_grad(struct fx_render_pass *fx_pass,
@@ -843,9 +878,8 @@ static void vk_render_pass_add_rounded_rect_grad(struct fx_render_pass *fx_pass,
 	}
 
 	vk_render_pass_add_grad_common(pass, &fx_options->base, &fx_options->gradient,
-		effects, &fx_options->corners, NULL);
+		effects, &fx_options->corners, &fx_options->frac_box, NULL);
 }
-
 static void vk_render_pass_add_box_shadow(struct fx_render_pass *fx_pass,
 		const struct fx_render_box_shadow_options *options) {
 	// A lost device rejects everything, so record nothing and let the
@@ -888,8 +922,7 @@ static void vk_render_pass_add_box_shadow(struct fx_render_pass *fx_pass,
 
 	pixman_region32_t clip_region;
 	get_clip_region(pass, options->clip, &clip_region);
-	apply_clip_region(&clip_region,
-		&options->clipped_region.area, &options->clipped_region.corners);
+	apply_clip_region(&clip_region, &options->clipped_region);
 
 	const bool should_clip = clipped_fregion_is_valid(&options->clipped_region);
 
@@ -948,8 +981,11 @@ static void vk_render_pass_add_box_shadow(struct fx_render_pass *fx_pass,
 			.bottom_left = options->corner_radius,
 			.bottom_right = options->corner_radius,
 		});
-	push_rounding_data(&shadow_pcr_data.base.clipping,
-		&options->clipped_region.area, &options->clipped_region.corners);
+	struct wlr_fbox shadow_clipped_frac_area =
+		clipped_fregion_frac_area(&options->clipped_region);
+	push_frac_rounding_data(&shadow_pcr_data.base.clipping,
+		&options->clipped_region.area, &shadow_clipped_frac_area,
+		&options->clipped_region.corners);
 
 	bind_pipeline(pass, pipeline->pipeline);
 	vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_VERTEX_BIT,
@@ -1748,7 +1784,15 @@ static void vk_render_pass_add_texture(struct fx_render_pass *fx_pass,
 	enum vk_fx_texture_transform transform =
 		get_texture_transform(options->texture, tf, &srgb_image_view);
 
-	const bool should_round_corners = !fx_corner_fradii_is_empty(&fx_options->corners);
+	// Exact destination box, so the buffer's own edges fade over the boundary
+	// pixels instead of snapping, matching the rect path.
+	struct wlr_fbox tex_dst_frac_box = fx_options->dst_frac_box;
+	if (wlr_fbox_empty(&tex_dst_frac_box)) {
+		tex_dst_frac_box = box_to_fbox(&dst_box);
+	}
+
+	const bool should_round_corners = !fx_corner_fradii_is_empty(&fx_options->corners)
+		|| fbox_has_fractional_edges(&tex_dst_frac_box);
 	const bool should_clip = clipped_fregion_is_valid(&fx_options->clipped_region);
 
 	enum fx_tex_shader_effects effects = SHADER_TEXTURE_EFFECT_NONE;
@@ -1796,14 +1840,17 @@ static void vk_render_pass_add_texture(struct fx_render_pass *fx_pass,
 			0.0f,
 		},
 	};
-	push_rounding_data(&tex_pcr_data.corner_rounding, clip_box, &fx_options->corners);
-	push_rounding_data(&tex_pcr_data.clipping,
-		&fx_options->clipped_region.area, &fx_options->clipped_region.corners);
+	push_frac_rounding_data(&tex_pcr_data.corner_rounding, clip_box,
+		&tex_dst_frac_box, &fx_options->corners);
+	struct wlr_fbox tex_clipped_frac_area =
+		clipped_fregion_frac_area(&fx_options->clipped_region);
+	push_frac_rounding_data(&tex_pcr_data.clipping,
+		&fx_options->clipped_region.area, &tex_clipped_frac_area,
+		&fx_options->clipped_region.corners);
 
 	pixman_region32_t clip_region;
 	get_clip_region(pass, options->clip, &clip_region);
-	apply_clip_region(&clip_region,
-		&fx_options->clipped_region.area, &fx_options->clipped_region.corners);
+	apply_clip_region(&clip_region, &fx_options->clipped_region);
 
 	bind_pipeline(pass, pipeline->pipeline);
 	vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,

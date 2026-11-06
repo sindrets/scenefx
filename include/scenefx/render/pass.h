@@ -26,6 +26,11 @@ struct fx_render_texture_options {
 	struct wlr_render_texture_options base;
 	const struct wlr_box *clip_box; // Used to clip csd. Ignored if NULL
 	struct fx_corner_fradii corners;
+	/* Exact, unrounded device-pixel box the buffer is drawn into. `base`'s
+	 * dst_box must cover this box; the renderers use both together to
+	 * antialias an edge that does not land on the pixel grid. Leave empty
+	 * for whole-pixel buffers. */
+	struct wlr_fbox dst_frac_box;
 	bool discard_transparent;
 	struct clipped_fregion clipped_region;
 
@@ -36,22 +41,31 @@ struct fx_render_texture_options {
 
 struct fx_render_rect_options {
 	struct wlr_render_rect_options base;
+	/* Exact, unrounded device-pixel box of the rect. `base.box` must cover
+	 * this box; the renderers use both together to antialias edges that do
+	 * not land on the pixel grid. Leave empty for whole-pixel rects. */
+	struct wlr_fbox frac_box;
 	struct clipped_fregion clipped_region;
 };
 
 struct fx_render_rect_grad_options {
 	struct wlr_render_rect_options base;
+	/* Exact, unrounded device-pixel box of the rect, see
+	 * fx_render_rect_options.frac_box. */
+	struct wlr_fbox frac_box;
 	struct fx_gradient gradient;
 };
 
 struct fx_render_rounded_rect_options {
 	struct wlr_render_rect_options base;
+	struct wlr_fbox frac_box;
 	struct fx_corner_fradii corners;
 	struct clipped_fregion clipped_region;
 };
 
 struct fx_render_rounded_rect_grad_options {
 	struct wlr_render_rect_options base;
+	struct wlr_fbox frac_box;
 	struct fx_gradient gradient;
 	struct fx_corner_fradii corners;
 };

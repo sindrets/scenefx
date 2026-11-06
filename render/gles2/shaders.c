@@ -145,12 +145,12 @@ void load_egl_proc(void *proc_ptr, const char *name) {
 // Shaders
 
 bool link_quad_program(struct quad_shader *shader, bool clip) {
-	GLchar quad_src_part[2048];
-	GLchar quad_src[4096];
+	GLchar quad_src_part[4096];
+	GLchar quad_src[16384];
 	snprintf(quad_src_part, sizeof(quad_src_part),
 		quad_frag_src, clip);
 	snprintf(quad_src, sizeof(quad_src),
-		"%s\n%s\n", quad_src_part, clip ? corner_alpha_frag_src : "");
+		"%s\n%s\n", quad_src_part, corner_alpha_frag_src);
 
 	GLuint prog;
 	shader->program = prog = link_program(quad_src);
@@ -161,6 +161,7 @@ bool link_quad_program(struct quad_shader *shader, bool clip) {
 	shader->proj = glGetUniformLocation(prog, "proj");
 	shader->color = glGetUniformLocation(prog, "color");
 	shader->pos_attrib = glGetAttribLocation(prog, "pos");
+	shader->box_edges = glGetUniformLocation(prog, "box_edges");
 
 	if (!clip) {
 		return true;
@@ -171,13 +172,14 @@ bool link_quad_program(struct quad_shader *shader, bool clip) {
 	shader->effects.clip_radius.top_right = glGetUniformLocation(prog, "clip_radius_top_right");
 	shader->effects.clip_radius.bottom_left = glGetUniformLocation(prog, "clip_radius_bottom_left");
 	shader->effects.clip_radius.bottom_right = glGetUniformLocation(prog, "clip_radius_bottom_right");
+	shader->effects.clip_box_edges = glGetUniformLocation(prog, "clip_box_edges");
 
 	return true;
 }
 
 bool link_quad_grad_program(struct quad_grad_shader *shader, int max_len) {
-	GLchar quad_src_part[2048];
-	GLchar quad_src[4096];
+	GLchar quad_src_part[4096];
+	GLchar quad_src[16384];
 	snprintf(quad_src_part, sizeof(quad_src_part),
 		quad_grad_frag_src, max_len);
 	snprintf(quad_src, sizeof(quad_src),
@@ -206,7 +208,7 @@ bool link_quad_grad_program(struct quad_grad_shader *shader, int max_len) {
 }
 
 bool link_quad_round_program(struct quad_round_shader *shader) {
-	GLchar quad_src[4096];
+	GLchar quad_src[16384];
 	snprintf(quad_src, sizeof(quad_src), "%s\n%s", quad_round_frag_src,
 		corner_alpha_frag_src);
 
@@ -221,6 +223,7 @@ bool link_quad_round_program(struct quad_round_shader *shader) {
 	shader->pos_attrib = glGetAttribLocation(prog, "pos");
 	shader->size = glGetUniformLocation(prog, "size");
 	shader->position = glGetUniformLocation(prog, "position");
+	shader->rect_box_edges = glGetUniformLocation(prog, "rect_box_edges");
 	shader->radius.top_left = glGetUniformLocation(prog, "radius_top_left");
 	shader->radius.top_right = glGetUniformLocation(prog, "radius_top_right");
 	shader->radius.bottom_left = glGetUniformLocation(prog, "radius_bottom_left");
@@ -232,13 +235,14 @@ bool link_quad_round_program(struct quad_round_shader *shader) {
 	shader->clip_radius.top_right = glGetUniformLocation(prog, "clip_radius_top_right");
 	shader->clip_radius.bottom_left = glGetUniformLocation(prog, "clip_radius_bottom_left");
 	shader->clip_radius.bottom_right = glGetUniformLocation(prog, "clip_radius_bottom_right");
+	shader->clip_box_edges = glGetUniformLocation(prog, "clip_box_edges");
 
 	return true;
 }
 
 bool link_quad_grad_round_program(struct quad_grad_round_shader *shader, int max_len) {
-	GLchar quad_src_part[2048];
-	GLchar quad_src[8192];
+	GLchar quad_src_part[4096];
+	GLchar quad_src[32768];
 	snprintf(quad_src_part, sizeof(quad_src_part),
 		quad_grad_round_frag_src, max_len);
 	snprintf(quad_src, sizeof(quad_src),
@@ -255,6 +259,7 @@ bool link_quad_grad_round_program(struct quad_grad_round_shader *shader, int max
 	shader->pos_attrib = glGetAttribLocation(prog, "pos");
 	shader->size = glGetUniformLocation(prog, "size");
 	shader->position = glGetUniformLocation(prog, "position");
+	shader->rect_box_edges = glGetUniformLocation(prog, "rect_box_edges");
 	shader->radius.top_left = glGetUniformLocation(prog, "radius_top_left");
 	shader->radius.top_right = glGetUniformLocation(prog, "radius_top_right");
 	shader->radius.bottom_left = glGetUniformLocation(prog, "radius_bottom_left");
@@ -277,7 +282,7 @@ bool link_quad_grad_round_program(struct quad_grad_round_shader *shader, int max
 bool link_tex_program(struct tex_shader *shader, enum fx_tex_shader_source source,
 		bool effects) {
 	GLchar frag_src_part[4096];
-	GLchar frag_src[8192];
+	GLchar frag_src[16384];
 	snprintf(frag_src_part, sizeof(frag_src_part),
 		tex_frag_src, source, effects);
 	snprintf(frag_src, sizeof(frag_src),
@@ -293,6 +298,7 @@ bool link_tex_program(struct tex_shader *shader, enum fx_tex_shader_source sourc
 	shader->tex = glGetUniformLocation(prog, "tex");
 	shader->alpha = glGetUniformLocation(prog, "alpha");
 	shader->pos_attrib = glGetAttribLocation(prog, "pos");
+	shader->box_edges = glGetUniformLocation(prog, "rect_box_edges");
 	shader->tex_proj = glGetUniformLocation(prog, "tex_proj");
 
 	shader->discard_transparent = glGetUniformLocation(prog, "discard_transparent");
@@ -308,6 +314,7 @@ bool link_tex_program(struct tex_shader *shader, enum fx_tex_shader_source sourc
 	shader->effects.radius.top_right = glGetUniformLocation(prog, "radius_top_right");
 	shader->effects.radius.bottom_left = glGetUniformLocation(prog, "radius_bottom_left");
 	shader->effects.radius.bottom_right = glGetUniformLocation(prog, "radius_bottom_right");
+	shader->effects.box_edges = glGetUniformLocation(prog, "rect_box_edges");
 
 	shader->effects.clip_size = glGetUniformLocation(prog, "clip_size");
 	shader->effects.clip_position = glGetUniformLocation(prog, "clip_position");
@@ -315,12 +322,13 @@ bool link_tex_program(struct tex_shader *shader, enum fx_tex_shader_source sourc
 	shader->effects.clip_radius.top_right = glGetUniformLocation(prog, "clip_radius_top_right");
 	shader->effects.clip_radius.bottom_left = glGetUniformLocation(prog, "clip_radius_bottom_left");
 	shader->effects.clip_radius.bottom_right = glGetUniformLocation(prog, "clip_radius_bottom_right");
+	shader->effects.clip_box_edges = glGetUniformLocation(prog, "clip_box_edges");
 
 	return true;
 }
 
 bool link_box_shadow_program(struct box_shadow_shader *shader) {
-	GLchar shadow_src[8192];
+	GLchar shadow_src[16384];
 	snprintf(shadow_src, sizeof(shadow_src), "%s\n%s", box_shadow_frag_src,
 		corner_alpha_frag_src);
 

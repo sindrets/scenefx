@@ -471,6 +471,38 @@ static void transform_output_box(struct wlr_box *box, const struct render_data *
 	wlr_box_transform(box, box, transform, data->trans_width, data->trans_height);
 }
 
+// Exact device-pixel box, keeping the fractional edges that scale_box() rounds
+// away. Rects are rendered through these so their edges can be antialiased
+// instead of snapped, which at a fractional output scale otherwise makes a 1px
+// logical border land on 1 or 2 device pixels depending on where it happens to
+// sit and visibly change width as the window moves.
+static void transform_output_fbox(struct wlr_fbox *box, const struct render_data *data) {
+	enum wl_output_transform transform = wlr_output_transform_invert(data->transform);
+
+	box->x *= data->scale;
+	box->y *= data->scale;
+	box->width *= data->scale;
+	box->height *= data->scale;
+
+	wlr_fbox_transform(box, box, transform, data->trans_width, data->trans_height);
+}
+
+// Integer box covering the whole of a fractional box, so every partially
+// covered pixel ends up inside the rendered area and can be blended into by the
+// coverage the shader computes from the fractional edges.
+static void fbox_to_cover_box(struct wlr_box *box, const struct wlr_fbox *fbox) {
+	int x1 = (int)floor(fbox->x);
+	int y1 = (int)floor(fbox->y);
+	int x2 = (int)ceil(fbox->x + fbox->width);
+	int y2 = (int)ceil(fbox->y + fbox->height);
+
+	*box = (struct wlr_box){
+		.x = x1,
+		.y = y1,
+		.width = x2 > x1 ? x2 - x1 : 0,
+		.height = y2 > y1 ? y2 - y1 : 0,
+	};
+}
 static void scene_output_damage(struct wlr_scene_output *scene_output,
 		const pixman_region32_t *damage) {
 	struct wlr_output *output = scene_output->output;
@@ -1998,12 +2030,26 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 	int x = entry->x - data->logical.x;
 	int y = entry->y - data->logical.y;
 
+	int node_width = 0, node_height = 0;
+	scene_node_get_size(node, &node_width, &node_height);
+
 	struct wlr_box dst_box = {
 		.x = x,
 		.y = y,
+		.width = node_width,
+		.height = node_height,
 	};
-	scene_node_get_size(node, &dst_box.width, &dst_box.height);
 	transform_output_box(&dst_box, data);
+
+	// Exact device-pixel box of the node, keeping the fractional edges that
+	// transform_output_box() rounds away so the shaders can antialias them.
+	struct wlr_fbox node_frac_box = {
+		.x = x,
+		.y = y,
+		.width = node_width,
+		.height = node_height,
+	};
+	transform_output_fbox(&node_frac_box, data);
 
 	pixman_region32_t opaque;
 	pixman_region32_init(&opaque);
@@ -2035,6 +2081,23 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 		transform_output_box(&rect_clipped_region_box, data);
 		fx_corner_radii_transform(node_transform, &rect_clipped_corners);
 
+		// Exact device-pixel geometry, so the shader can antialias edges that
+		// miss the pixel grid instead of snapping them.
+		struct wlr_fbox dst_frac_box = node_frac_box;
+		// Render over every pixel the exact box partly covers, otherwise the
+		// coverage the shader computes for them would be clipped away.
+		fbox_to_cover_box(&dst_box, &dst_frac_box);
+
+		struct wlr_fbox rect_clipped_frac_area = {0};
+		if (!wlr_box_empty(&scene_rect->clipped_region.area)) {
+			rect_clipped_frac_area = (struct wlr_fbox){
+				.x = scene_rect->clipped_region.area.x + x,
+				.y = scene_rect->clipped_region.area.y + y,
+				.width = scene_rect->clipped_region.area.width,
+				.height = scene_rect->clipped_region.area.height,
+			};
+			transform_output_fbox(&rect_clipped_frac_area, data);
+		}
 		struct fx_render_rect_options rect_options = {
 			.base = {
 				.box = dst_box,
@@ -2046,8 +2109,10 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 				},
 				.clip = &render_region,
 			},
+			.frac_box = dst_frac_box,
 			.clipped_region = {
 				.area = rect_clipped_region_box,
+				.frac_area = rect_clipped_frac_area,
 				.corners = fx_corner_radii_scale(rect_clipped_corners, data->scale),
 			},
 		};
@@ -2057,6 +2122,7 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 		} else if (!fx_corner_radii_is_empty(&rect_corners)) {
 			struct fx_render_rounded_rect_options rounded_rect_options = {
 				.base = rect_options.base,
+				.frac_box = rect_options.frac_box,
 				.corners = fx_corner_radii_scale(rect_corners, data->scale),
 				.clipped_region = rect_options.clipped_region,
 			};
@@ -2122,8 +2188,13 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 				.clip = &render_region, // Render with the smaller region, clipping CSD
 				.alpha = &scene_buffer->opacity,
 				.filter_mode = scene_buffer->filter_mode,
+				// Overwrite what is underneath only when the buffer really is
+				// opaque over the whole destination. A buffer whose exact
+				// edges miss the pixel grid fades along them, so it has to
+				// blend there.
 				.blend_mode = !data->output->scene->calculate_visibility ||
-					!pixman_region32_empty(&opaque) ?
+					!pixman_region32_empty(&opaque) ||
+					fbox_has_fractional_edges(&node_frac_box) ?
 					WLR_RENDER_BLEND_MODE_PREMULTIPLIED : WLR_RENDER_BLEND_MODE_NONE,
 				.transfer_function = scene_buffer->transfer_function,
 				.primaries = scene_buffer->primaries != 0 ? &primaries : NULL,
@@ -2135,11 +2206,15 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 			},
 			.clip_box = &dst_box,
 			.corners = fx_corner_radii_scale(buffer_corners, data->scale),
+			.dst_frac_box = node_frac_box,
 			.clipped_region = {0},
 		};
 
+		// Route through the fx pass whenever the buffer's exact edges miss the
+		// pixel grid, or the plain wlroots call would snap them.
 		if (data->fx_pass == NULL || (fx_corner_radii_is_empty(&buffer_corners)
-					&& wlr_box_empty(&tex_options.clipped_region.area))) {
+					&& wlr_box_empty(&tex_options.clipped_region.area)
+					&& !fbox_has_fractional_edges(&node_frac_box))) {
 			wlr_render_pass_add_texture(data->render_pass, &tex_options.base);
 		} else {
 			fx_render_pass_add_texture(data->fx_pass, &tex_options);

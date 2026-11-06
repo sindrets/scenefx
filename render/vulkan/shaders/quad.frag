@@ -11,12 +11,21 @@ layout(push_constant) uniform UBO {
 	float radius_bottom_left;
 	float radius_bottom_right;
 
+	// Exact device-pixel edges, (left, top, right, bottom), and whether they
+	// are meaningful. A zero `has_box_edges` means the caller renders a
+	// whole-pixel box, so the quad covers its pixels fully.
+	float box_edges_valid;
+	vec4 box_edges;
+
 	vec2 clip_size;
 	vec2 clip_position;
 	float clip_radius_top_left;
 	float clip_radius_top_right;
 	float clip_radius_bottom_left;
 	float clip_radius_bottom_right;
+
+	float clip_box_edges_valid;
+	vec4 clip_box_edges;
 } data;
 
 layout (constant_id = 0) const int EFFECTS = 0;
@@ -30,12 +39,22 @@ layout (constant_id = 0) const int EFFECTS = 0;
 void main() {
 	out_color = data.color;
 
+	// Exact edge coverage, so a box that misses the pixel grid fades across
+	// its boundary pixels instead of snapping to them. The colour is
+	// pre-multiplied, so the coverage scales every channel. Rounded corners
+	// fold the edge coverage into rounded_box_coverage(), so only the
+	// plain-rect path needs it here.
+	if ((EFFECTS & EFFECT_ROUND_CORNERS) != EFFECT_ROUND_CORNERS
+			&& data.box_edges_valid != 0.0) {
+		out_color *= box_coverage(data.box_edges);
+	}
+
 	// Corner rounding
 	if ((EFFECTS & EFFECT_ROUND_CORNERS) == EFFECT_ROUND_CORNERS) {
-		out_color *= corner_alpha(
-			data.size - 1.0,
-			data.position + 0.5,
-			false,
+		out_color *= rounded_box_coverage(
+			data.box_edges,
+			data.size,
+			data.position,
 			data.radius_top_left,
 			data.radius_top_right,
 			data.radius_bottom_left,
@@ -45,10 +64,10 @@ void main() {
 
 	// Clipping
 	if ((EFFECTS & EFFECT_CLIPPING) == EFFECT_CLIPPING) {
-		out_color *= corner_alpha(
-			data.clip_size - 1.0,
-			data.clip_position + 0.5,
-			true,
+		out_color *= cutout_coverage(
+			data.clip_box_edges,
+			data.clip_size,
+			data.clip_position,
 			data.clip_radius_top_left,
 			data.clip_radius_top_right,
 			data.clip_radius_bottom_left,

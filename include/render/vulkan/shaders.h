@@ -11,6 +11,10 @@ struct vk_render_pass;
 struct vk_renderer;
 struct vk_render_setup;
 
+// Matches the `corner_rounding` / `clipping` halves of the fragment shaders'
+// push constant blocks. `edges_valid` is 0 when the caller renders a
+// whole-pixel box, in which case `edges` is ignored and the shape covers its
+// pixels fully.
 struct vk_shader_rounding_data {
 	float size[2];
 	float position[2];
@@ -20,6 +24,15 @@ struct vk_shader_rounding_data {
 		float bottom_left;
 		float bottom_right;
 	} radius;
+
+	// Exact device-pixel edges, (left, top, right, bottom), of the shape this
+	// data describes. Used to antialias edges that miss the pixel grid.
+	//
+	// std430 rounds the `vec4` up to a 16-byte boundary, so the shader reads
+	// `edges` at offset 48 with three words of padding after `edges_valid`.
+	float edges_valid;
+	float _pad[3];
+	float edges[4];
 };
 
 ///

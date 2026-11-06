@@ -28,6 +28,9 @@ uniform sampler2D tex;
 #endif
 
 uniform float alpha;
+// Exact device-pixel edges of the destination box, (left, top, right,
+// bottom), used to antialias an edge that misses the pixel grid.
+uniform vec4 rect_box_edges;
 
 #if EFFECTS
 uniform vec2 size;
@@ -43,6 +46,7 @@ uniform float clip_radius_top_left;
 uniform float clip_radius_top_right;
 uniform float clip_radius_bottom_left;
 uniform float clip_radius_bottom_right;
+uniform vec4 clip_box_edges;
 #endif
 
 uniform bool discard_transparent;
@@ -57,7 +61,9 @@ vec4 sample_texture() {
 }
 
 #if EFFECTS
-float corner_alpha(vec2 size, vec2 position, bool is_cutout,
+float rounded_box_coverage(vec4 edges, vec2 size, vec2 position,
+		float radius_tl, float radius_tr, float radius_bl, float radius_br);
+float cutout_coverage(vec4 edges, vec2 size, vec2 position,
 		float radius_tl, float radius_tr, float radius_bl, float radius_br);
 #endif
 
@@ -65,10 +71,10 @@ void main() {
 	vec4 color = sample_texture();
 
 #if EFFECTS
-	float quad_corner_alpha = corner_alpha(
-		size - 0.5,
-		position + 0.25,
-		false,
+	float quad_corner_alpha = rounded_box_coverage(
+		rect_box_edges,
+		size,
+		position,
 		radius_top_left,
 		radius_top_right,
 		radius_bottom_left,
@@ -76,10 +82,10 @@ void main() {
 	);
 
 	// Clipping
-	float clip_corner_alpha = corner_alpha(
-		clip_size - 1.0,
-		clip_position + 0.5,
-		true,
+	float clip_corner_alpha = cutout_coverage(
+		clip_box_edges,
+		clip_size,
+		clip_position,
 		clip_radius_top_left,
 		clip_radius_top_right,
 		clip_radius_bottom_left,

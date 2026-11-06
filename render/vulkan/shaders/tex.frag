@@ -15,12 +15,20 @@ layout(push_constant) uniform UBO {
 	float radius_bottom_left;
 	float radius_bottom_right;
 
+	// Exact device-pixel edges of the destination box, (left, top, right,
+	// bottom), and whether they are meaningful (0 = whole-pixel box).
+	float box_edges_valid;
+	vec4 box_edges;
+
 	vec2 clip_size;
 	vec2 clip_position;
 	float clip_radius_top_left;
 	float clip_radius_top_right;
 	float clip_radius_bottom_left;
 	float clip_radius_bottom_right;
+
+	float clip_box_edges_valid;
+	vec4 clip_box_edges;
 } data;
 
 layout (constant_id = 0) const int EFFECTS = 0;
@@ -104,25 +112,26 @@ void main() {
 	// Back to pre-multiplied alpha
 	vec4 color = vec4(rgb * alpha, alpha);
 
-	// Corner rounding
-	if ((EFFECTS & EFFECT_ROUND_CORNERS) == EFFECT_ROUND_CORNERS) {
-		color *= corner_alpha(
-			data.size - 0.5,
-			data.position + 0.25,
-			false,
+	// Straight edges of the destination box. A buffer that does not land on
+	// the pixel grid fades over its boundary pixels instead of snapping, so
+	// the same rule applies whether or not the corners are rounded.
+	if (data.box_edges_valid != 0.0) {
+		color *= rounded_box_coverage(
+			data.box_edges,
+			data.size,
+			data.position,
 			data.radius_top_left,
 			data.radius_top_right,
 			data.radius_bottom_left,
 			data.radius_bottom_right
 		);
 	}
-
 	// Clipping
 	if ((EFFECTS & EFFECT_CLIPPING) == EFFECT_CLIPPING) {
-		color *= corner_alpha(
-			data.clip_size - 1.0,
-			data.clip_position + 0.5,
-			true,
+		color *= cutout_coverage(
+			data.clip_box_edges,
+			data.clip_size,
+			data.clip_position,
 			data.clip_radius_top_left,
 			data.clip_radius_top_right,
 			data.clip_radius_bottom_left,

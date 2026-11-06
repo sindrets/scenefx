@@ -33,12 +33,15 @@ struct quad_shader {
 	GLint proj;
 	GLint color;
 	GLint pos_attrib;
+	// Exact device-pixel box edges for box_coverage()
+	GLint box_edges;
 
 	// Only used for the effects shader
 	struct {
 		GLint clip_size;
 		GLint clip_position;
 		struct shader_corner_radii clip_radius;
+		GLint clip_box_edges;
 	} effects;
 };
 
@@ -69,12 +72,15 @@ struct quad_round_shader {
 	GLint pos_attrib;
 	GLint size;
 	GLint position;
+	// Exact device-pixel edges for box_coverage()
+	GLint rect_box_edges;
 
 	struct shader_corner_radii radius;
 
 	GLint clip_size;
 	GLint clip_position;
 	struct shader_corner_radii clip_radius;
+	GLint clip_box_edges;
 };
 
 bool link_quad_round_program(struct quad_round_shader *shader);
@@ -86,6 +92,7 @@ struct quad_grad_round_shader {
 	GLint pos_attrib;
 	GLint size;
 	GLint position;
+	GLint rect_box_edges;
 
 	GLint colors;
 	GLint grad_size;
@@ -110,6 +117,8 @@ struct tex_shader {
 	GLint tex;
 	GLint alpha;
 	GLint pos_attrib;
+	// Exact device-pixel box edges for box_coverage()
+	GLint box_edges;
 
 	GLint discard_transparent;
 	GLint ignore_alpha_threshold;
@@ -118,11 +127,13 @@ struct tex_shader {
 	struct {
 		GLint size;
 		GLint position;
+		GLint box_edges;
 		struct shader_corner_radii radius;
 
 		GLint clip_size;
 		GLint clip_position;
 		struct shader_corner_radii clip_radius;
+		GLint clip_box_edges;
 	} effects;
 };
 
@@ -142,6 +153,7 @@ struct box_shadow_shader {
 	GLint clip_position;
 	GLint clip_size;
 	struct shader_corner_radii clip_radius;
+	GLint clip_box_edges;
 };
 
 bool link_box_shadow_program(struct box_shadow_shader *shader);

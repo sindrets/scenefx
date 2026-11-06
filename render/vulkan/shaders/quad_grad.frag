@@ -25,12 +25,20 @@ layout(push_constant) uniform UBO {
 	float radius_bottom_left;
 	float radius_bottom_right;
 
+	// Exact device-pixel edges of the destination box, (left, top, right,
+	// bottom), and whether they are meaningful (0 = whole-pixel box).
+	float box_edges_valid;
+	vec4 box_edges;
+
 	vec2 clip_size;
 	vec2 clip_position;
 	float clip_radius_top_left;
 	float clip_radius_top_right;
 	float clip_radius_bottom_left;
 	float clip_radius_bottom_right;
+
+	float clip_box_edges_valid;
+	vec4 clip_box_edges;
 } data;
 
 layout (constant_id = 0) const int EFFECTS = 0;
@@ -56,10 +64,10 @@ void main() {
 	// Like the gles2 quad_grad shader, the base colour's alpha is only used to
 	// fade out the corners of a rounded gradient rectangle.
 	if ((EFFECTS & EFFECT_ROUND_CORNERS) == EFFECT_ROUND_CORNERS) {
-		color *= data.color.a * corner_alpha(
-			data.size - 0.5,
-			data.position + 0.25,
-			false,
+		color *= data.color.a * rounded_box_coverage(
+			data.box_edges,
+			data.size,
+			data.position,
 			data.radius_top_left,
 			data.radius_top_right,
 			data.radius_bottom_left,
@@ -69,10 +77,10 @@ void main() {
 
 	// Clipping
 	if ((EFFECTS & EFFECT_CLIPPING) == EFFECT_CLIPPING) {
-		color *= corner_alpha(
-			data.clip_size - 1.0,
-			data.clip_position + 0.5,
-			true,
+		color *= cutout_coverage(
+			data.clip_box_edges,
+			data.clip_size,
+			data.clip_position,
 			data.clip_radius_top_left,
 			data.clip_radius_top_right,
 			data.clip_radius_bottom_left,

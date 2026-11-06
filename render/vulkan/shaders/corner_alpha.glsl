@@ -2,8 +2,83 @@ float get_dist(vec2 q, float radius) {
 	return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - radius;
 }
 
+// Exact axis-aligned coverage of the box [edges.xy, edges.zw] in device
+// pixels, box filtered over the pixel's own area. `edges` holds
+// (left, top, right, bottom) as unrounded device-pixel coordinates, so a box
+// that does not land on the pixel grid fades across its boundary pixels
+// instead of snapping to them. Whole-pixel boxes yield exactly 0.0 or 1.0.
+float box_coverage(vec4 edges) {
+	vec2 px = gl_FragCoord.xy;
+	vec2 cov = min(edges.zw, px + 0.5) - max(edges.xy, px - 0.5);
+	cov = clamp(cov, 0.0, 1.0);
+	return cov.x * cov.y;
+}
+
+// Distance field ramp of a rounded corner: 0.0 on or inside the shape, 1.0 a
+// pixel beyond it. Only meaningful inside the corner regions of the box.
+float corner_sdf(vec2 size, vec2 position, float radius_tl, float radius_tr,
+		float radius_bl, float radius_br) {
+	vec2 relative_pos = gl_FragCoord.xy - position;
+
+	vec2 top_left = abs(relative_pos - size) - size + radius_tl;
+	vec2 top_right = abs(relative_pos - vec2(0, size.y)) - size + radius_tr;
+	vec2 bottom_left = abs(relative_pos - vec2(size.x, 0)) - size + radius_bl;
+	vec2 bottom_right = abs(relative_pos) - size + radius_br;
+
+	float dist = max(
+		max(get_dist(top_left, radius_tl), get_dist(top_right, radius_tr)),
+		max(get_dist(bottom_left, radius_bl), get_dist(bottom_right, radius_br))
+	);
+
+	return smoothstep(0.0, 1.0, dist);
+}
+
+// Whether the fragment lies in one of the four corner squares of the box.
+bool in_corner_region(vec2 relative_pos, vec2 size, float radius_tl, float radius_tr,
+		float radius_bl, float radius_br) {
+	return (radius_tl > 0.0 && relative_pos.x <= radius_tl && relative_pos.y <= radius_tl) ||
+		(radius_tr > 0.0 && relative_pos.x >= size.x - radius_tr && relative_pos.y <= radius_tr) ||
+		(radius_bl > 0.0 && relative_pos.x <= radius_bl && relative_pos.y >= size.y - radius_bl) ||
+		(radius_br > 0.0 && relative_pos.x >= size.x - radius_br && relative_pos.y >= size.y - radius_br);
+}
+
+// Coverage of the shape itself: the exact box edges multiplied by the rounded
+// corner SDF. `edges` are unrounded device-pixel edges, so straight edges that
+// miss the pixel grid are antialiased too, not just the corners.
+float rounded_box_coverage(vec4 edges, vec2 size, vec2 position,
+		float radius_tl, float radius_tr, float radius_bl, float radius_br) {
+	float cov = box_coverage(edges);
+	if (cov <= 0.0) {
+		return 0.0;
+	}
+
+	if (radius_tl <= 0.0 && radius_tr <= 0.0
+			&& radius_bl <= 0.0 && radius_br <= 0.0) {
+		return cov;
+	}
+
+	vec2 relative_pos = gl_FragCoord.xy - position;
+	if (!in_corner_region(relative_pos, size, radius_tl, radius_tr, radius_bl, radius_br)) {
+		return cov;
+	}
+
+	return cov * (1.0 - corner_sdf(size, position, radius_tl, radius_tr, radius_bl, radius_br));
+}
+
+// Inverse of rounded_box_coverage(): 1.0 where the shape can be seen, 0.0
+// inside it, blended across pixels its edges only partly cover.
+float cutout_coverage(vec4 edges, vec2 size, vec2 position,
+		float radius_tl, float radius_tr, float radius_bl, float radius_br) {
+	return 1.0 - rounded_box_coverage(edges, size, position,
+		radius_tl, radius_tr, radius_bl, radius_br);
+}
+
 // Note: Returns 0.0 if outside, 1.0 if inside the bounds. The is_cutout parameter
 // reverses this, 0.0 inside cutout and 1.0 for outside cutout.
+//
+// Kept for the callers that only have a rounded box (no exact edges), such as
+// box shadows: they pass a slightly inset box to the cutout so the corner ramp
+// lands on whole pixels.
 float corner_alpha(vec2 size, vec2 position, bool is_cutout,
 		float radius_tl, float radius_tr, float radius_bl, float radius_br) {
 	if (radius_tl <= 0.0
@@ -23,35 +98,13 @@ float corner_alpha(vec2 size, vec2 position, bool is_cutout,
 		discard;
 	}
 
-	bool is_top_left = radius_tl > 0.0
-		&& relative_pos.x <= radius_tl
-		&& relative_pos.y <= radius_tl;
-	bool is_top_right = radius_tr > 0.0
-		&& relative_pos.x >= size.x - radius_tr
-		&& relative_pos.y <= radius_tr;
-	bool is_bottom_left = radius_bl > 0.0
-		&& relative_pos.x <= radius_bl
-		&& relative_pos.y >= size.y - radius_bl;
-	bool is_bottom_right = radius_br > 0.0
-		&& relative_pos.x >= size.x - radius_br
-		&& relative_pos.y >= size.y - radius_br;
-	if (!is_top_left && !is_top_right && !is_bottom_left && !is_bottom_right) {
+	if (!in_corner_region(relative_pos, size, radius_tl, radius_tr, radius_bl, radius_br)) {
 		if (is_cutout) {
 			discard;
 		}
 		return 1.0;
 	}
 
-	vec2 top_left = abs(relative_pos - size) - size + radius_tl;
-	vec2 top_right = abs(relative_pos - vec2(0, size.y)) - size + radius_tr;
-	vec2 bottom_left = abs(relative_pos - vec2(size.x, 0)) - size + radius_bl;
-	vec2 bottom_right = abs(relative_pos) - size + radius_br;
-
-	float dist = max(
-		max(get_dist(top_left, radius_tl), get_dist(top_right, radius_tr)),
-		max(get_dist(bottom_left, radius_bl), get_dist(bottom_right, radius_br))
-	);
-
-	float result = smoothstep(0.0, 1.0, dist);
+	float result = corner_sdf(size, position, radius_tl, radius_tr, radius_bl, radius_br);
 	return is_cutout ? result : 1.0 - result;
 }

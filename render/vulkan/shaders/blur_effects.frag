@@ -39,6 +39,11 @@ layout(push_constant) uniform UBO {
 	float radius_bottom_left;
 	float radius_bottom_right;
 
+	// Exact device-pixel edges of the destination box, (left, top, right,
+	// bottom), and whether they are meaningful (0 = whole-pixel box).
+	float box_edges_valid;
+	vec4 box_edges;
+
 	// Coordinates the mask is sampled with, and the alpha below which a masked
 	// pixel is treated as transparent. When has_mask is 0 the mask is ignored.
 	vec2 mask_uv;
@@ -101,15 +106,25 @@ void main() {
 	}
 
 	// Rounded corners, matching how the GLES2 path masks the blurred buffer.
-	color *= corner_alpha(
-		data.size - 0.5,
-		data.position + 0.25,
-		false,
-		data.radius_top_left,
-		data.radius_top_right,
-		data.radius_bottom_left,
-		data.radius_bottom_right
-	);
+	// Without exact edges (whole-pixel box) fall back to the corner ramp.
+	float coverage = data.box_edges_valid != 0.0
+		? rounded_box_coverage(
+			data.box_edges,
+			data.size,
+			data.position,
+			data.radius_top_left,
+			data.radius_top_right,
+			data.radius_bottom_left,
+			data.radius_bottom_right)
+		: corner_alpha(
+			data.size,
+			data.position,
+			false,
+			data.radius_top_left,
+			data.radius_top_right,
+			data.radius_bottom_left,
+			data.radius_bottom_right);
+	color *= coverage;
 
 	out_color = color;
 }

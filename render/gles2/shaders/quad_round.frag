@@ -7,6 +7,8 @@ precision mediump float;
 varying vec4 v_color;
 varying vec2 v_texcoord;
 
+uniform vec4 rect_box_edges;
+
 uniform vec2 size;
 uniform vec2 position;
 uniform float radius_top_left;
@@ -20,15 +22,19 @@ uniform float clip_radius_top_left;
 uniform float clip_radius_top_right;
 uniform float clip_radius_bottom_left;
 uniform float clip_radius_bottom_right;
+uniform vec4 clip_box_edges;
 
-float corner_alpha(vec2 size, vec2 position, bool is_cutout,
+float box_coverage(vec4 edges);
+float rounded_box_coverage(vec4 edges, vec2 size, vec2 position,
+		float radius_tl, float radius_tr, float radius_bl, float radius_br);
+float cutout_coverage(vec4 edges, vec2 size, vec2 position,
 		float radius_tl, float radius_tr, float radius_bl, float radius_br);
 
 void main() {
-	float quad_corner_alpha = corner_alpha(
-		size - 1.0,
-		position + 0.5,
-		false,
+	float quad_corner_alpha = rounded_box_coverage(
+		rect_box_edges,
+		size,
+		position,
 		radius_top_left,
 		radius_top_right,
 		radius_bottom_left,
@@ -36,10 +42,10 @@ void main() {
 	);
 
 	// Clipping
-	float clip_corner_alpha = corner_alpha(
-		clip_size - 1.0,
-		clip_position + 0.5,
-		true,
+	float clip_corner_alpha = cutout_coverage(
+		clip_box_edges,
+		clip_size,
+		clip_position,
 		clip_radius_top_left,
 		clip_radius_top_right,
 		clip_radius_bottom_left,

@@ -35,6 +35,15 @@ static void uniform_corner_radii_set(const struct shader_corner_radii *uniform,
 	glUniform1f(uniform->bottom_right, corners->bottom_right);
 }
 
+// Exact device-pixel edges, (left, top, right, bottom), for box_coverage().
+static void uniform_box_edges(int32_t uniform, const struct wlr_fbox *box) {
+	if (uniform < 0) {
+		return;
+	}
+
+	glUniform4f(uniform, box->x, box->y,
+		box->x + box->width, box->y + box->height);
+}
 // TODO: REMOVE STENCILING
 
 // Initialize the stenciling work
@@ -270,9 +279,11 @@ static void gles2_render_pass_add_texture(struct fx_render_pass *fx_pass,
 
 	struct tex_shader *shader = NULL;
 
+	struct wlr_fbox dst_frac_box = fx_options->dst_frac_box;
 	bool use_effects = !fx_corner_fradii_is_empty(&fx_options->corners)
 		|| clipped_fregion_is_valid(&fx_options->clipped_region)
-		|| fx_options->discard_transparent;
+		|| fx_options->discard_transparent
+		|| fbox_has_fractional_edges(&dst_frac_box);
 	switch (attribs.target) {
 	case GL_TEXTURE_2D:
 		if (attribs.has_alpha) {
@@ -369,7 +380,13 @@ static void gles2_render_pass_add_texture(struct fx_render_pass *fx_pass,
 	}
 	const struct wlr_box clipped_region_box = fx_options->clipped_region.area;
 	struct fx_corner_fradii clipped_region_corners = fx_options->clipped_region.corners;
+	struct wlr_fbox clipped_frac_area = clipped_fregion_frac_area(&fx_options->clipped_region);
 	apply_clip_region(&clip_region, &clipped_region_box, &clipped_region_corners);
+	// Exact device-pixel edges of the shape being drawn, so the tex shader
+	// antialiases an edge that misses the pixel grid.
+	if (wlr_fbox_empty(&dst_frac_box)) {
+		dst_frac_box = box_to_fbox(&dst_box);
+	}
 
 	glUseProgram(shader->program);
 
@@ -400,10 +417,12 @@ static void gles2_render_pass_add_texture(struct fx_render_pass *fx_pass,
 		glUniform2f(shader->effects.size, clip_box->width, clip_box->height);
 		glUniform2f(shader->effects.position, clip_box->x, clip_box->y);
 		uniform_corner_radii_set(&shader->effects.radius, &corners);
+		uniform_box_edges(shader->effects.box_edges, &dst_frac_box);
 
 		glUniform2f(shader->effects.clip_size, clipped_region_box.width, clipped_region_box.height);
 		glUniform2f(shader->effects.clip_position, clipped_region_box.x, clipped_region_box.y);
 		uniform_corner_radii_set(&shader->effects.clip_radius, &clipped_region_corners);
+		uniform_box_edges(shader->effects.clip_box_edges, &clipped_frac_area);
 	}
 
 	set_proj_matrix(shader->proj, pass->projection_matrix, &dst_box);
@@ -433,6 +452,14 @@ static void gles2_render_pass_add_rect(struct fx_render_pass *fx_pass,
 	const bool should_clip = clipped_fregion_is_valid(&fx_options->clipped_region);
 	const struct wlr_box *clipped_region_box = &fx_options->clipped_region.area;
 	const struct fx_corner_fradii *clipped_region_corners = &fx_options->clipped_region.corners;
+
+	// Exact device-pixel edges, so the shader fades the rect out over the
+	// boundary pixels its logical edges only partly cover.
+	struct wlr_fbox frac_box = fx_options->frac_box;
+	if (wlr_fbox_empty(&frac_box)) {
+		frac_box = box_to_fbox(&box);
+	}
+	struct wlr_fbox clipped_frac_area = clipped_fregion_frac_area(&fx_options->clipped_region);
 
 	enum wlr_render_blend_mode blend_mode =
 		(color->a == 1.0 && !should_clip) ? WLR_RENDER_BLEND_MODE_NONE : options->blend_mode;
@@ -468,10 +495,12 @@ static void gles2_render_pass_add_rect(struct fx_render_pass *fx_pass,
 	glUseProgram(shader->program);
 	set_proj_matrix(shader->proj, pass->projection_matrix, &box);
 	glUniform4f(shader->color, color->r, color->g, color->b, color->a);
+	uniform_box_edges(shader->box_edges, &frac_box);
 	if (should_clip) {
 		glUniform2f(shader->effects.clip_size, clipped_region_box->width, clipped_region_box->height);
 		glUniform2f(shader->effects.clip_position, clipped_region_box->x, clipped_region_box->y);
 		uniform_corner_radii_set(&shader->effects.clip_radius, clipped_region_corners);
+		uniform_box_edges(shader->effects.clip_box_edges, &clipped_frac_area);
 	}
 	render(&box, &clip_region, shader->pos_attrib);
 
@@ -562,6 +591,12 @@ static void gles2_render_pass_add_rounded_rect(struct fx_render_pass *fx_pass,
 	const struct fx_corner_fradii *clipped_region_corners = &fx_options->clipped_region.corners;
 	apply_clip_region(&clip_region, clipped_region_box, clipped_region_corners);
 
+	struct wlr_fbox frac_box = fx_options->frac_box;
+	if (wlr_fbox_empty(&frac_box)) {
+		frac_box = box_to_fbox(&box);
+	}
+	struct wlr_fbox clipped_frac_area = clipped_fregion_frac_area(&fx_options->clipped_region);
+
 	TRACY_BOTH_ZONES_START(&gles2_renderer->fx_renderer);
 	TRACY_ZONE_TEXT_f("Box (WxH, X, Y): %dx%d, %d, %d", box.width, box.height, box.x, box.y);
 	TRACY_ZONE_TEXT_f("Clip Box (WxH, X, Y): %dx%d, %d, %d",
@@ -587,12 +622,14 @@ static void gles2_render_pass_add_rounded_rect(struct fx_render_pass *fx_pass,
 
 	set_proj_matrix(shader.proj, pass->projection_matrix, &box);
 	glUniform4f(shader.color, color->r, color->g, color->b, color->a);
+	uniform_box_edges(shader.rect_box_edges, &frac_box);
 
 	glUniform2f(shader.size, box.width, box.height);
 	glUniform2f(shader.position, box.x, box.y);
 	glUniform2f(shader.clip_size, clipped_region_box->width, clipped_region_box->height);
 	glUniform2f(shader.clip_position, clipped_region_box->x, clipped_region_box->y);
 	uniform_corner_radii_set(&shader.clip_radius, clipped_region_corners);
+	uniform_box_edges(shader.clip_box_edges, &clipped_frac_area);
 
 	struct fx_corner_fradii corners = fx_options->corners;
 	uniform_corner_radii_set(&shader.radius, &corners);
@@ -653,8 +690,14 @@ static void gles2_render_pass_add_rounded_rect_grad(struct fx_render_pass *fx_pa
 
 	set_proj_matrix(shader.proj, pass->projection_matrix, &box);
 
+	struct wlr_fbox frac_box = fx_options->frac_box;
+	if (wlr_fbox_empty(&frac_box)) {
+		frac_box = box_to_fbox(&box);
+	}
+
 	glUniform2f(shader.size, box.width, box.height);
 	glUniform2f(shader.position, box.x, box.y);
+	uniform_box_edges(shader.rect_box_edges, &frac_box);
 
 	glUniform4fv(shader.colors, fx_options->gradient.count, (GLfloat*)fx_options->gradient.colors);
 	glUniform1i(shader.count, fx_options->gradient.count);

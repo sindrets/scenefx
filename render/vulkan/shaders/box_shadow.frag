@@ -12,12 +12,20 @@ layout(push_constant) uniform UBO {
 	float radius_bottom_left;
 	float radius_bottom_right;
 
+	// Exact device-pixel edges of the destination box, (left, top, right,
+	// bottom), and whether they are meaningful (0 = whole-pixel box).
+	float box_edges_valid;
+	vec4 box_edges;
+
 	vec2 clip_size;
 	vec2 clip_position;
 	float clip_radius_top_left;
 	float clip_radius_top_right;
 	float clip_radius_bottom_left;
 	float clip_radius_bottom_right;
+
+	float clip_box_edges_valid;
+	vec4 clip_box_edges;
 
 	// (blur_sigma, corner_radius, unused, unused)
 	vec4 shadow_params;
@@ -99,10 +107,10 @@ void main() {
 
 	// Clipping
 	if ((EFFECTS & EFFECT_CLIPPING) == EFFECT_CLIPPING) {
-		shadow_alpha *= corner_alpha(
-			data.clip_size - 1.5,
-			data.clip_position + 0.75,
-			true,
+		shadow_alpha *= cutout_coverage(
+			data.clip_box_edges,
+			data.clip_size,
+			data.clip_position,
 			data.clip_radius_top_left,
 			data.clip_radius_top_right,
 			data.clip_radius_bottom_left,
