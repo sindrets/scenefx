@@ -452,7 +452,7 @@ static void vk_render_pass_add_rect(struct fx_render_pass *fx_pass,
 	};
 	push_frac_rounding_data(&quad_pcr_data.corner_rounding, &box, &fx_options->frac_box,
 		&(struct fx_corner_fradii){ 0 });
-	struct wlr_fbox clipped_frac_area = clipped_fregion_frac_area(&fx_options->clipped_region);
+	struct wlr_fbox clipped_frac_area = clipped_fregion_cover_area(&fx_options->clipped_region);
 	push_frac_rounding_data(&quad_pcr_data.clipping,
 		&fx_options->clipped_region.area, &clipped_frac_area,
 		&fx_options->clipped_region.corners);
@@ -540,7 +540,7 @@ static void vk_render_pass_add_rounded_rect(struct fx_render_pass *fx_pass,
 	push_frac_rounding_data(&quad_pcr_data.corner_rounding, &box, &fx_options->frac_box,
 		&fx_options->corners);
 	struct wlr_fbox rounded_clipped_frac_area =
-		clipped_fregion_frac_area(&fx_options->clipped_region);
+		clipped_fregion_cover_area(&fx_options->clipped_region);
 	push_frac_rounding_data(&quad_pcr_data.clipping,
 		&fx_options->clipped_region.area, &rounded_clipped_frac_area,
 		&fx_options->clipped_region.corners);
@@ -839,7 +839,7 @@ static void vk_render_pass_add_grad_common(struct vk_render_pass *pass,
 		push_frac_rounding_data(&quad_pcr_data.corner_rounding, &box, frac_box, corners);
 	}
 	if (clipped_region != NULL) {
-		struct wlr_fbox clipped_frac_area = clipped_fregion_frac_area(clipped_region);
+		struct wlr_fbox clipped_frac_area = clipped_fregion_cover_area(clipped_region);
 		push_frac_rounding_data(&quad_pcr_data.clipping,
 			&clipped_region->area, &clipped_frac_area, &clipped_region->corners);
 	}
@@ -982,7 +982,7 @@ static void vk_render_pass_add_box_shadow(struct fx_render_pass *fx_pass,
 			.bottom_right = options->corner_radius,
 		});
 	struct wlr_fbox shadow_clipped_frac_area =
-		clipped_fregion_frac_area(&options->clipped_region);
+		clipped_fregion_cover_area(&options->clipped_region);
 	push_frac_rounding_data(&shadow_pcr_data.base.clipping,
 		&options->clipped_region.area, &shadow_clipped_frac_area,
 		&options->clipped_region.corners);
@@ -1843,7 +1843,7 @@ static void vk_render_pass_add_texture(struct fx_render_pass *fx_pass,
 	push_frac_rounding_data(&tex_pcr_data.corner_rounding, clip_box,
 		&tex_dst_frac_box, &fx_options->corners);
 	struct wlr_fbox tex_clipped_frac_area =
-		clipped_fregion_frac_area(&fx_options->clipped_region);
+		clipped_fregion_cover_area(&fx_options->clipped_region);
 	push_frac_rounding_data(&tex_pcr_data.clipping,
 		&fx_options->clipped_region.area, &tex_clipped_frac_area,
 		&fx_options->clipped_region.corners);

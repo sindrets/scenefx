@@ -2179,6 +2179,8 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 			WLR_COLOR_TRANSFER_FUNCTION_SRGB, &srgb_lum);
 		float luminance_multiplier = get_luminance_multiplier(&src_lum, &srgb_lum);
 
+		struct wlr_box dst_cover_box = dst_box;
+		fbox_to_cover_box(&dst_cover_box, &node_frac_box);
 		struct fx_render_texture_options tex_options = {
 			.base = (struct wlr_render_texture_options){
 				.texture = texture,
@@ -2217,6 +2219,11 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 					&& !fbox_has_fractional_edges(&node_frac_box))) {
 			wlr_render_pass_add_texture(data->render_pass, &tex_options.base);
 		} else {
+			// The quad has to span every pixel the exact box partly covers, or
+			// the coverage the shader computes for those pixels is never
+			// rasterized and the buffer cannot fade into the border it sits
+			// against. Only the fx path fades, so only it needs the wider quad.
+			tex_options.base.dst_box = dst_cover_box;
 			fx_render_pass_add_texture(data->fx_pass, &tex_options);
 		}
 
