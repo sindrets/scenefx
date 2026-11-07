@@ -314,11 +314,6 @@ static void gles2_render_pass_add_texture(struct fx_render_pass *fx_pass,
 	wlr_render_texture_options_get_dst_box(options, &dst_box);
 	float alpha = wlr_render_texture_options_get_alpha(options);
 
-	const struct wlr_box *clip_box = &dst_box;
-	if (!wlr_box_empty(fx_options->clip_box)) {
-		clip_box = fx_options->clip_box;
-	}
-
 	src_fbox.x /= options->texture->width;
 	src_fbox.y /= options->texture->height;
 	src_fbox.width /= options->texture->width;
@@ -327,8 +322,6 @@ static void gles2_render_pass_add_texture(struct fx_render_pass *fx_pass,
 	TRACY_BOTH_ZONES_START(&gles2_renderer->fx_renderer);
 	TRACY_ZONE_TEXT_f("dst_box (WxH, X, Y): %dx%d, %d, %d",
 			dst_box.width, dst_box.height, dst_box.x, dst_box.y);
-	TRACY_ZONE_TEXT_f("clip_box (WxH, X, Y): %dx%d, %d, %d",
-			clip_box->width, clip_box->height, clip_box->x, clip_box->y);
 	TRACY_ZONE_TEXT_f("src_box (WxH, X, Y): %lfx%lf, %lf, %lf",
 			src_fbox.width, src_fbox.height, src_fbox.x, src_fbox.y);
 	TRACY_ZONE_TEXT_f("Shader Type: %s",
@@ -380,7 +373,7 @@ static void gles2_render_pass_add_texture(struct fx_render_pass *fx_pass,
 	}
 	const struct wlr_box clipped_region_box = fx_options->clipped_region.area;
 	struct fx_corner_fradii clipped_region_corners = fx_options->clipped_region.corners;
-	struct wlr_fbox clipped_frac_area = clipped_fregion_cover_area(&fx_options->clipped_region);
+	struct wlr_fbox clipped_frac_area = clipped_fregion_frac_area(&fx_options->clipped_region);
 	apply_clip_region(&clip_region, &clipped_region_box, &clipped_region_corners);
 	// Exact device-pixel edges of the shape being drawn, so the tex shader
 	// antialiases an edge that misses the pixel grid.
@@ -414,13 +407,13 @@ static void gles2_render_pass_add_texture(struct fx_render_pass *fx_pass,
 	if (use_effects) {
 		struct fx_corner_fradii corners = fx_options->corners;
 
-		glUniform2f(shader->effects.size, clip_box->width, clip_box->height);
-		glUniform2f(shader->effects.position, clip_box->x, clip_box->y);
+		glUniform2f(shader->effects.size, dst_frac_box.width, dst_frac_box.height);
+		glUniform2f(shader->effects.position, dst_frac_box.x, dst_frac_box.y);
 		uniform_corner_radii_set(&shader->effects.radius, &corners);
 		uniform_box_edges(shader->effects.box_edges, &dst_frac_box);
 
-		glUniform2f(shader->effects.clip_size, clipped_region_box.width, clipped_region_box.height);
-		glUniform2f(shader->effects.clip_position, clipped_region_box.x, clipped_region_box.y);
+		glUniform2f(shader->effects.clip_size, clipped_frac_area.width, clipped_frac_area.height);
+		glUniform2f(shader->effects.clip_position, clipped_frac_area.x, clipped_frac_area.y);
 		uniform_corner_radii_set(&shader->effects.clip_radius, &clipped_region_corners);
 		uniform_box_edges(shader->effects.clip_box_edges, &clipped_frac_area);
 	}
@@ -459,7 +452,7 @@ static void gles2_render_pass_add_rect(struct fx_render_pass *fx_pass,
 	if (wlr_fbox_empty(&frac_box)) {
 		frac_box = box_to_fbox(&box);
 	}
-	struct wlr_fbox clipped_frac_area = clipped_fregion_cover_area(&fx_options->clipped_region);
+	struct wlr_fbox clipped_frac_area = clipped_fregion_frac_area(&fx_options->clipped_region);
 
 	enum wlr_render_blend_mode blend_mode =
 		(color->a == 1.0 && !should_clip) ? WLR_RENDER_BLEND_MODE_NONE : options->blend_mode;
@@ -497,8 +490,8 @@ static void gles2_render_pass_add_rect(struct fx_render_pass *fx_pass,
 	glUniform4f(shader->color, color->r, color->g, color->b, color->a);
 	uniform_box_edges(shader->box_edges, &frac_box);
 	if (should_clip) {
-		glUniform2f(shader->effects.clip_size, clipped_region_box->width, clipped_region_box->height);
-		glUniform2f(shader->effects.clip_position, clipped_region_box->x, clipped_region_box->y);
+		glUniform2f(shader->effects.clip_size, clipped_frac_area.width, clipped_frac_area.height);
+		glUniform2f(shader->effects.clip_position, clipped_frac_area.x, clipped_frac_area.y);
 		uniform_corner_radii_set(&shader->effects.clip_radius, clipped_region_corners);
 		uniform_box_edges(shader->effects.clip_box_edges, &clipped_frac_area);
 	}
@@ -595,7 +588,7 @@ static void gles2_render_pass_add_rounded_rect(struct fx_render_pass *fx_pass,
 	if (wlr_fbox_empty(&frac_box)) {
 		frac_box = box_to_fbox(&box);
 	}
-	struct wlr_fbox clipped_frac_area = clipped_fregion_cover_area(&fx_options->clipped_region);
+	struct wlr_fbox clipped_frac_area = clipped_fregion_frac_area(&fx_options->clipped_region);
 
 	TRACY_BOTH_ZONES_START(&gles2_renderer->fx_renderer);
 	TRACY_ZONE_TEXT_f("Box (WxH, X, Y): %dx%d, %d, %d", box.width, box.height, box.x, box.y);
@@ -624,10 +617,10 @@ static void gles2_render_pass_add_rounded_rect(struct fx_render_pass *fx_pass,
 	glUniform4f(shader.color, color->r, color->g, color->b, color->a);
 	uniform_box_edges(shader.rect_box_edges, &frac_box);
 
-	glUniform2f(shader.size, box.width, box.height);
-	glUniform2f(shader.position, box.x, box.y);
-	glUniform2f(shader.clip_size, clipped_region_box->width, clipped_region_box->height);
-	glUniform2f(shader.clip_position, clipped_region_box->x, clipped_region_box->y);
+	glUniform2f(shader.size, frac_box.width, frac_box.height);
+	glUniform2f(shader.position, frac_box.x, frac_box.y);
+	glUniform2f(shader.clip_size, clipped_frac_area.width, clipped_frac_area.height);
+	glUniform2f(shader.clip_position, clipped_frac_area.x, clipped_frac_area.y);
 	uniform_corner_radii_set(&shader.clip_radius, clipped_region_corners);
 	uniform_box_edges(shader.clip_box_edges, &clipped_frac_area);
 
@@ -695,8 +688,8 @@ static void gles2_render_pass_add_rounded_rect_grad(struct fx_render_pass *fx_pa
 		frac_box = box_to_fbox(&box);
 	}
 
-	glUniform2f(shader.size, box.width, box.height);
-	glUniform2f(shader.position, box.x, box.y);
+	glUniform2f(shader.size, frac_box.width, frac_box.height);
+	glUniform2f(shader.position, frac_box.x, frac_box.y);
 	uniform_box_edges(shader.rect_box_edges, &frac_box);
 
 	glUniform4fv(shader.colors, fx_options->gradient.count, (GLfloat*)fx_options->gradient.colors);

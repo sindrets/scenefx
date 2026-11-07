@@ -65,17 +65,22 @@ float rounded_box_coverage(vec4 edges, vec2 size, vec2 position,
 	return cov * (1.0 - corner_sdf(size, position, radius_tl, radius_tr, radius_bl, radius_br));
 }
 
-// Inverse of rounded_box_coverage(), but binary: 0.0 only where the shape
-// covers the whole pixel, 1.0 everywhere else.
+// Inverse of rounded_box_coverage(), but hard: 0.0 only where the shape covers
+// the whole pixel, 1.0 everywhere else.
 //
 // A hole must not fade. The shape drawn inside it (a client surface, say) fades
-// across the very pixels the hole's edge passes through, and if the hole faded
-// there too the two fades would compose: the pixel would be left with exactly
-// c*(1-c) of whatever sits behind the hole, so the background bleeds through
-// the seam between border and surface. A straight hole edge is snapped to whole
-// pixels instead (clipped_fregion_cover_area()), but a rounded one cannot be
-// snapped without flattening the arc, so it is cut hard here and the shape on
-// top alone provides the antialiasing.
+// across the very pixels the hole's edge passes through, and the border sits
+// *under* that shape, so if the hole faded there too the pixel would be left
+// with exactly c*(1-c) of whatever is behind the border: the background bleeds
+// through the seam between border and surface.
+//
+// Cutting the hole hard instead makes the border solid right through the
+// boundary pixel, and the shape on top — which fades by its own coverage c —
+// supplies the antialiasing. The pixel ends up as c*surface + (1-c)*border,
+// which is the blend the geometry asks for, with nothing behind it showing.
+// The hole and the shape inside it must still describe the same geometry, so
+// both are given the exact fractional box and the same corner radii (see
+// client_inner_corner_location() in the compositor).
 float cutout_coverage(vec4 edges, vec2 size, vec2 position,
 		float radius_tl, float radius_tr, float radius_bl, float radius_br) {
 	return rounded_box_coverage(edges, size, position,
