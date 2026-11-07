@@ -1356,8 +1356,15 @@ static void vk_render_pass_add_blur(struct fx_render_pass *fx_pass,
 	// tex_options (the top-level fx_render_blur_pass_options.corners is not set
 	// by the scene), and its box is the tex_options destination box. Without
 	// this a rounded blur node renders with square corners.
-	push_rounding_data(&effects_pcr_data.corner_rounding,
-		&fx_options->tex_options.base.dst_box, &fx_options->tex_options.corners);
+	//
+	// Use the exact destination box, not the rounded one: with only whole-pixel
+	// edges the composite falls back to corner_alpha(), which discards outside
+	// the arc instead of fading, so a blurred node whose arc misses the pixel
+	// grid paints the blurred background right up to its rounded boundary and
+	// leaves a fringe of it showing beside the border's own antialiased arc.
+	push_frac_rounding_data(&effects_pcr_data.corner_rounding,
+		&fx_options->tex_options.base.dst_box,
+		&fx_options->tex_options.dst_frac_box, &fx_options->tex_options.corners);
 
 	// Map the shader's uv onto the mask texture.
 	//

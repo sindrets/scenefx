@@ -107,15 +107,21 @@ void main() {
 
 	// Rounded corners, matching how the GLES2 path masks the blurred buffer.
 	// Without exact edges (whole-pixel box) fall back to the corner ramp.
+	// Only paint where the shape covers the whole pixel. The blur node shares
+	// its outline with the client surface and the border ring sits over both,
+	// so a faded arc would put the transparency-mask's blurred backdrop and the
+	// surface's own antialiased edge on the same pixel, leaving a fringe of
+	// background between them. Where the arc only partly covers a pixel the
+	// ring is solid above it, so nothing is lost by not painting there.
 	float coverage = data.box_edges_valid != 0.0
-		? rounded_box_coverage(
+		? (rounded_box_coverage(
 			data.box_edges,
 			data.size,
 			data.position,
 			data.radius_top_left,
 			data.radius_top_right,
 			data.radius_bottom_left,
-			data.radius_bottom_right)
+			data.radius_bottom_right) >= 1.0 ? 1.0 : 0.0)
 		: corner_alpha(
 			data.size,
 			data.position,

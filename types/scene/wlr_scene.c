@@ -2346,6 +2346,7 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 					.blend_mode = WLR_RENDER_BLEND_MODE_PREMULTIPLIED,
 				},
 				.clip_box = &dst_box,
+				.dst_frac_box = node_frac_box,
 				.corners = fx_corner_radii_scale(blur_corners, data->scale),
 				.discard_transparent = false,
 			},
