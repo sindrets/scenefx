@@ -135,6 +135,7 @@ static void push_rounding_data(struct vk_shader_rounding_data *data,
 			.bottom_left = corners->bottom_left,
 			.bottom_right = corners->bottom_right,
 		},
+		.exponent = fx_corner_fradii_exponent(corners),
 	};
 }
 
@@ -162,6 +163,7 @@ static void push_frac_rounding_data(struct vk_shader_rounding_data *data,
 			.bottom_left = corners->bottom_left,
 			.bottom_right = corners->bottom_right,
 		},
+		.exponent = fx_corner_fradii_exponent(corners),
 	};
 	data->edges_valid = 1.0f;
 	data->edges[0] = frac_box->x;
@@ -925,6 +927,7 @@ static void vk_render_pass_add_box_shadow(struct fx_render_pass *fx_pass,
 					.top_right = radius,
 					.bottom_left = radius,
 					.bottom_right = radius,
+					.exponent = corner_exponent_normalize(options->corner_exponent),
 				},
 				.clipped_region = options->clipped_region,
 			});
@@ -995,6 +998,7 @@ static void vk_render_pass_add_box_shadow(struct fx_render_pass *fx_pass,
 			.top_right = options->corner_radius,
 			.bottom_left = options->corner_radius,
 			.bottom_right = options->corner_radius,
+			.exponent = corner_exponent_normalize(options->corner_exponent),
 		});
 	struct wlr_fbox shadow_clipped_frac_area =
 		clipped_fregion_frac_area(&options->clipped_region);

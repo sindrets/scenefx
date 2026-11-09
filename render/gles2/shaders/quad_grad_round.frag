@@ -18,6 +18,7 @@ uniform float radius_top_left;
 uniform float radius_top_right;
 uniform float radius_bottom_left;
 uniform float radius_bottom_right;
+uniform float exponent;
 
 uniform vec4 colors[LEN];
 uniform vec2 grad_size;
@@ -32,9 +33,11 @@ vec4 gradient(vec4 colors[LEN], int count, vec2 size, vec2 grad_box, vec2 origin
 
 float box_coverage(vec4 edges);
 float rounded_box_coverage(vec4 edges, vec2 size, vec2 position,
-		float radius_tl, float radius_tr, float radius_bl, float radius_br);
+		float radius_tl, float radius_tr, float radius_bl, float radius_br,
+		float exponent);
 float cutout_coverage(vec4 edges, vec2 size, vec2 position,
-		float radius_tl, float radius_tr, float radius_bl, float radius_br);
+		float radius_tl, float radius_tr, float radius_bl, float radius_br,
+		float exponent);
 
 void main() {
 	float quad_corner_alpha = rounded_box_coverage(
@@ -44,7 +47,8 @@ void main() {
 		radius_top_left,
 		radius_top_right,
 		radius_bottom_left,
-		radius_bottom_right
+		radius_bottom_right,
+		exponent
 	);
 	float rect_alpha = v_color.a * quad_corner_alpha;
 

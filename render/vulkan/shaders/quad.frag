@@ -15,6 +15,8 @@ layout(push_constant) uniform UBO {
 	// are meaningful. A zero `has_box_edges` means the caller renders a
 	// whole-pixel box, so the quad covers its pixels fully.
 	float box_edges_valid;
+	float exponent;
+	vec2 _pad;
 	vec4 box_edges;
 
 	vec2 clip_size;
@@ -25,6 +27,8 @@ layout(push_constant) uniform UBO {
 	float clip_radius_bottom_right;
 
 	float clip_box_edges_valid;
+	float clip_exponent;
+	vec2 _clip_pad;
 	vec4 clip_box_edges;
 } data;
 
@@ -58,7 +62,8 @@ void main() {
 			data.radius_top_left,
 			data.radius_top_right,
 			data.radius_bottom_left,
-			data.radius_bottom_right
+			data.radius_bottom_right,
+			data.exponent
 		);
 	}
 
@@ -71,7 +76,8 @@ void main() {
 			data.clip_radius_top_left,
 			data.clip_radius_top_right,
 			data.clip_radius_bottom_left,
-			data.clip_radius_bottom_right
+			data.clip_radius_bottom_right,
+			data.clip_exponent
 		);
 	}
 }

@@ -26,6 +26,8 @@ struct shader_corner_radii {
 	GLint top_right;
 	GLint bottom_left;
 	GLint bottom_right;
+	/* Superellipse exponent of the corner curve, see struct fx_corner_radii. */
+	GLint exponent;
 };
 
 struct quad_shader {
@@ -149,6 +151,8 @@ struct box_shadow_shader {
 	GLint size;
 	GLint blur_sigma;
 	GLint corner_radius;
+	/* Superellipse exponent of the shadow's corner curve. */
+	GLint exponent;
 
 	GLint clip_position;
 	GLint clip_size;

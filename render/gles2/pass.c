@@ -33,6 +33,7 @@ static void uniform_corner_radii_set(const struct shader_corner_radii *uniform,
 	glUniform1f(uniform->top_right, corners->top_right);
 	glUniform1f(uniform->bottom_left, corners->bottom_left);
 	glUniform1f(uniform->bottom_right, corners->bottom_right);
+	glUniform1f(uniform->exponent, fx_corner_fradii_exponent(corners));
 }
 
 // Exact device-pixel edges, (left, top, right, bottom), for box_coverage().
@@ -730,6 +731,7 @@ static void gles2_render_pass_add_box_shadow(struct fx_render_pass *fx_pass,
 				.top_right = options->corner_radius,
 				.bottom_right = options->corner_radius,
 				.bottom_left = options->corner_radius,
+				.exponent = corner_exponent_normalize(options->corner_exponent),
 			},
 			.clipped_region = options->clipped_region,
 		});
@@ -777,6 +779,7 @@ static void gles2_render_pass_add_box_shadow(struct fx_render_pass *fx_pass,
 	glUniform2f(shader.size, box.width, box.height);
 	glUniform2f(shader.position, box.x, box.y);
 	glUniform1f(shader.corner_radius, options->corner_radius);
+	glUniform1f(shader.exponent, corner_exponent_normalize(options->corner_exponent));
 
 	uniform_corner_radii_set(&shader.clip_radius, &clipped_region_corners);
 

@@ -27,11 +27,10 @@ struct vk_shader_rounding_data {
 
 	// Exact device-pixel edges, (left, top, right, bottom), of the shape this
 	// data describes. Used to antialias edges that miss the pixel grid.
-	//
-	// std430 rounds the `vec4` up to a 16-byte boundary, so the shader reads
-	// `edges` at offset 48 with three words of padding after `edges_valid`.
 	float edges_valid;
-	float _pad[3];
+	// Superellipse exponent of the corner curve, see struct fx_corner_radii.
+	float exponent;
+	float _pad[2];
 	float edges[4];
 };
 

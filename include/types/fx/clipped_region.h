@@ -8,12 +8,21 @@ struct fx_corner_fradii {
     float top_right;
     float bottom_right;
     float bottom_left;
+    /* Superellipse exponent of the corner curve, see struct fx_corner_radii.
+     * Normalised, so it is never 0. */
+    float exponent;
 };
 
 
 bool fx_corner_fradii_is_empty(const struct fx_corner_fradii* corners);
 
 struct fx_corner_fradii fx_corner_radii_scale(struct fx_corner_radii, float scale);
+
+/* The exponent to hand the shaders: normalised, so an unset corner radius (whose
+ * exponent is 0) draws a circular corner rather than a degenerate curve. */
+static __always_inline float fx_corner_fradii_exponent(const struct fx_corner_fradii *corners) {
+	return corner_exponent_normalize(corners->exponent);
+}
 
 struct clipped_fregion {
     struct wlr_box area;

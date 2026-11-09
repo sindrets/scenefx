@@ -22,14 +22,17 @@ uniform float clip_radius_top_left;
 uniform float clip_radius_top_right;
 uniform float clip_radius_bottom_left;
 uniform float clip_radius_bottom_right;
+uniform float clip_exponent;
 uniform vec4 clip_box_edges;
 #endif
 
 float box_coverage(vec4 edges);
 float rounded_box_coverage(vec4 edges, vec2 size, vec2 position,
-		float radius_tl, float radius_tr, float radius_bl, float radius_br);
+		float radius_tl, float radius_tr, float radius_bl, float radius_br,
+		float exponent);
 float cutout_coverage(vec4 edges, vec2 size, vec2 position,
-		float radius_tl, float radius_tr, float radius_bl, float radius_br);
+		float radius_tl, float radius_tr, float radius_bl, float radius_br,
+		float exponent);
 
 void main() {
 	// Fade the rect out over the pixels its exact edges only partly cover.
@@ -44,7 +47,8 @@ void main() {
 		clip_radius_top_left,
 		clip_radius_top_right,
 		clip_radius_bottom_left,
-		clip_radius_bottom_right
+		clip_radius_bottom_right,
+		clip_exponent
 	);
 #endif
 

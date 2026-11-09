@@ -42,6 +42,8 @@ layout(push_constant) uniform UBO {
 	// Exact device-pixel edges of the destination box, (left, top, right,
 	// bottom), and whether they are meaningful (0 = whole-pixel box).
 	float box_edges_valid;
+	float exponent;
+	vec2 _pad;
 	vec4 box_edges;
 
 	// Coordinates the mask is sampled with, and the alpha below which a masked
@@ -121,7 +123,8 @@ void main() {
 			data.radius_top_left,
 			data.radius_top_right,
 			data.radius_bottom_left,
-			data.radius_bottom_right) >= 1.0 ? 1.0 : 0.0)
+			data.radius_bottom_right,
+			data.exponent) >= 1.0 ? 1.0 : 0.0)
 		: corner_alpha(
 			data.size,
 			data.position,
@@ -129,7 +132,8 @@ void main() {
 			data.radius_top_left,
 			data.radius_top_right,
 			data.radius_bottom_left,
-			data.radius_bottom_right);
+			data.radius_bottom_right,
+			data.exponent);
 	color *= coverage;
 
 	out_color = color;

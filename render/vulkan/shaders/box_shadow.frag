@@ -15,6 +15,8 @@ layout(push_constant) uniform UBO {
 	// Exact device-pixel edges of the destination box, (left, top, right,
 	// bottom), and whether they are meaningful (0 = whole-pixel box).
 	float box_edges_valid;
+	float exponent;
+	vec2 _pad;
 	vec4 box_edges;
 
 	vec2 clip_size;
@@ -25,6 +27,8 @@ layout(push_constant) uniform UBO {
 	float clip_radius_bottom_right;
 
 	float clip_box_edges_valid;
+	float clip_exponent;
+	vec2 _clip_pad;
 	vec4 clip_box_edges;
 
 	// (blur_sigma, corner_radius, unused, unused)
@@ -51,18 +55,40 @@ vec2 erf(vec2 x) {
 	return s - s / (x * x);
 }
 
+// Half-width of the superellipse corner curve at a distance `t * corner` into
+// the corner square, as a fraction of the corner: the x where
+//
+//     x^exponent + t^exponent = 1
+//
+// with both normalised to the corner. 2 is the circular corner the writeup
+// above uses, i.e. sqrt(1 - t*t).
+float superellipse_inset(float t, float exponent) {
+	if (exponent == 2.0) {
+		return sqrt(max(0.0, 1.0 - t * t));
+	}
+
+	return pow(max(0.0, 1.0 - pow(t, exponent)), 1.0 / exponent);
+}
+
 // Return the blurred mask along the x dimension.
 float rounded_box_shadow_x(float x, float y, float sigma, float extent, float corner,
-		vec2 half_size) {
+		vec2 half_size, float exponent) {
+	// How far the point sits inside the corner square, as a fraction of the
+	// corner. `delta` is zero or negative for points along the straight edge.
 	float delta = min(half_size.y - corner - abs(y), 0.0);
-	float curved = half_size.x - corner + sqrt(max(0.0, corner * corner - delta * delta));
+	float curved = half_size.x;
+	if (corner > 0.0) {
+		float t = clamp(-delta / corner, 0.0, 1.0);
+		curved = half_size.x - corner + corner * superellipse_inset(t, exponent);
+	}
 	vec2 edges = clamp(x + vec2(-curved, curved), -extent, extent);
 	vec2 integral = 0.5 + 0.5 * erf(edges * (sqrt(0.5) / sigma));
 	return integral.y - integral.x;
 }
 
 // Return the mask for the shadow of a box from lower to upper.
-float rounded_box_shadow(vec2 lower, vec2 upper, vec2 point, float sigma, float corner) {
+float rounded_box_shadow(vec2 lower, vec2 upper, vec2 point, float sigma, float corner,
+		float exponent) {
 	vec2 center = (lower + upper) * 0.5;
 	vec2 half_size = (upper - lower) * 0.5;
 	point -= center;
@@ -79,7 +105,7 @@ float rounded_box_shadow(vec2 lower, vec2 upper, vec2 point, float sigma, float 
 	float value = 0.0;
 	for (int i = 0; i < 4; i++) {
 		value += rounded_box_shadow_x(point.x, point.y - y, sigma, extent, corner,
-			half_size) * gaussian(y, sigma) * step;
+			half_size, exponent) * gaussian(y, sigma) * step;
 		y += step;
 	}
 
@@ -115,7 +141,8 @@ void main() {
 		shadow_position + shadow_size - blur_sigma,
 		gl_FragCoord.xy,
 		blur_sigma * 0.5,
-		corner_radius);
+		corner_radius,
+		data.exponent);
 
 	// Clipping
 	if ((EFFECTS & EFFECT_CLIPPING) == EFFECT_CLIPPING) {
@@ -126,7 +153,8 @@ void main() {
 			data.clip_radius_top_left,
 			data.clip_radius_top_right,
 			data.clip_radius_bottom_left,
-			data.clip_radius_bottom_right);
+			data.clip_radius_bottom_right,
+			data.clip_exponent);
 	}
 
 	// Colours arrive in sRGB and the render target is an sRGB image.

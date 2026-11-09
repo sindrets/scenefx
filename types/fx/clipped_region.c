@@ -7,6 +7,7 @@ struct fx_corner_radii fx_corner_radii_extend(struct fx_corner_radii corners, in
 		.top_right = corners.top_right == 0 ? 0 : (corners.top_right + extend),
 		.bottom_left = corners.bottom_left == 0 ? 0 : (corners.bottom_left + extend),
 		.bottom_right = corners.bottom_right == 0 ? 0 : (corners.bottom_right + extend),
+		.exponent = corners.exponent,
 	};
 }
 
@@ -17,7 +18,8 @@ void fx_corner_radii_transform(enum wl_output_transform transform,
 			corners->top_right,
 			corners->top_left,
 			corners->bottom_left,
-			corners->bottom_right
+			corners->bottom_right,
+			corners->exponent,
 		};
 	}
 
@@ -29,6 +31,7 @@ void fx_corner_radii_transform(enum wl_output_transform transform,
 			points[(turns + 1) % 4],
 			points[(turns + 2) % 4],
 			points[(turns + 3) % 4],
+			corners->exponent,
 		};
 	}
 }
@@ -39,6 +42,7 @@ struct fx_corner_fradii fx_corner_radii_scale(struct fx_corner_radii corners, fl
 	(float)corners.top_right * scale,
 	(float)corners.bottom_right * scale,
 	(float)corners.bottom_left * scale,
+	corner_exponent_normalize(corners.exponent),
 	};
 }
 
@@ -46,7 +50,8 @@ bool fx_corner_radii_eq(const struct fx_corner_radii lhs, const struct fx_corner
 	return lhs.top_left == rhs.top_left
 		&& lhs.top_right == rhs.top_right
 		&& lhs.bottom_right == rhs.bottom_right
-		&& lhs.bottom_left == rhs.bottom_left;
+		&& lhs.bottom_left == rhs.bottom_left
+		&& lhs.exponent == rhs.exponent;
 }
 
 bool fx_corner_radii_is_empty(const struct fx_corner_radii* corners) {

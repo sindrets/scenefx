@@ -13,12 +13,14 @@ uniform vec2 position;
 uniform vec2 size;
 uniform float blur_sigma;
 uniform float corner_radius;
+uniform float exponent;
 uniform vec2 clip_position;
 uniform vec2 clip_size;
 uniform float clip_radius_top_left;
 uniform float clip_radius_top_right;
 uniform float clip_radius_bottom_left;
 uniform float clip_radius_bottom_right;
+uniform float clip_exponent;
 
 float gaussian(float x, float sigma) {
     const float pi = 3.141592653589793;
@@ -33,17 +35,40 @@ vec2 erf(vec2 x) {
     return s - s / (x * x);
 }
 
+// Half-width of the superellipse corner curve at a distance `t * corner` into
+// the corner square, as a fraction of the corner: the x where
+//
+//     x^exponent + t^exponent = 1
+//
+// with both normalised to the corner. 2 is the circular corner the writeup
+// above uses, i.e. sqrt(1 - t*t).
+float superellipseInset(float t, float exponent) {
+    if (exponent == 2.0) {
+        return sqrt(max(0.0, 1.0 - t * t));
+    }
+
+    return pow(max(0.0, 1.0 - pow(t, exponent)), 1.0 / exponent);
+}
+
 // return the blurred mask along the x dimension
-float roundedBoxShadowX(float x, float y, float sigma, float extent, float corner, vec2 halfSize) {
+float roundedBoxShadowX(float x, float y, float sigma, float extent, float corner,
+        vec2 halfSize, float exponent) {
+    // How far the point sits inside the corner square, as a fraction of the
+    // corner. `delta` is zero or negative for points along the straight edge.
     float delta = min(halfSize.y - corner - abs(y), 0.0);
-    float curved = halfSize.x - corner + sqrt(max(0.0, corner * corner - delta * delta));
+    float curved = halfSize.x;
+    if (corner > 0.0) {
+        float t = clamp(-delta / corner, 0.0, 1.0);
+        curved = halfSize.x - corner + corner * superellipseInset(t, exponent);
+    }
     vec2 edges = clamp(x + vec2(-curved, curved), -extent, extent);
     vec2 integral = 0.5 + 0.5 * erf(edges * (sqrt(0.5) / sigma));
     return integral.y - integral.x;
 }
 
 // return the mask for the shadow of a box from lower to upper
-float roundedBoxShadow(vec2 lower, vec2 upper, vec2 point, float sigma, float corner_radius) {
+float roundedBoxShadow(vec2 lower, vec2 upper, vec2 point, float sigma, float corner_radius,
+        float exponent) {
     // Center everything to make the math easier
     vec2 center = (lower + upper) * 0.5;
     vec2 halfSize = (upper - lower) * 0.5;
@@ -61,7 +86,8 @@ float roundedBoxShadow(vec2 lower, vec2 upper, vec2 point, float sigma, float co
     float y = start + step * 0.5;
     float value = 0.0;
     for (int i = 0; i < 4; i++) {
-        value += roundedBoxShadowX(point.x, point.y - y, sigma, extent, corner_radius, halfSize) * gaussian(y, sigma) * step;
+        value += roundedBoxShadowX(point.x, point.y - y, sigma, extent, corner_radius,
+            halfSize, exponent) * gaussian(y, sigma) * step;
         y += step;
     }
 
@@ -72,14 +98,16 @@ float roundedBoxShadow(vec2 lower, vec2 upper, vec2 point, float sigma, float co
 }
 
 float corner_alpha(vec2 size, vec2 position, bool is_cutout,
-        float radius_tl, float radius_tr, float radius_bl, float radius_br);
+        float radius_tl, float radius_tr, float radius_bl, float radius_br,
+        float exponent);
 
 void main() {
     float shadow_alpha = v_color.a * roundedBoxShadow(
             position + blur_sigma,
             position + size - blur_sigma,
             gl_FragCoord.xy, blur_sigma * 0.5,
-            corner_radius);
+            corner_radius,
+            exponent);
 
     // Clipping
     float clip_corner_alpha = corner_alpha(
@@ -89,7 +117,8 @@ void main() {
         clip_radius_top_left,
         clip_radius_top_right,
         clip_radius_bottom_left,
-        clip_radius_bottom_right
+        clip_radius_bottom_right,
+        clip_exponent
     );
 
     gl_FragColor = vec4(v_color.rgb, shadow_alpha) * clip_corner_alpha;

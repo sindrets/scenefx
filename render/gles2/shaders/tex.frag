@@ -39,6 +39,7 @@ uniform float radius_top_left;
 uniform float radius_top_right;
 uniform float radius_bottom_left;
 uniform float radius_bottom_right;
+uniform float exponent;
 
 uniform vec2 clip_size;
 uniform vec2 clip_position;
@@ -46,6 +47,7 @@ uniform float clip_radius_top_left;
 uniform float clip_radius_top_right;
 uniform float clip_radius_bottom_left;
 uniform float clip_radius_bottom_right;
+uniform float clip_exponent;
 uniform vec4 clip_box_edges;
 #endif
 
@@ -62,9 +64,11 @@ vec4 sample_texture() {
 
 #if EFFECTS
 float rounded_box_coverage(vec4 edges, vec2 size, vec2 position,
-		float radius_tl, float radius_tr, float radius_bl, float radius_br);
+		float radius_tl, float radius_tr, float radius_bl, float radius_br,
+		float exponent);
 float cutout_coverage(vec4 edges, vec2 size, vec2 position,
-		float radius_tl, float radius_tr, float radius_bl, float radius_br);
+		float radius_tl, float radius_tr, float radius_bl, float radius_br,
+		float exponent);
 #endif
 
 void main() {
@@ -78,7 +82,8 @@ void main() {
 		radius_top_left,
 		radius_top_right,
 		radius_bottom_left,
-		radius_bottom_right
+		radius_bottom_right,
+		exponent
 	);
 
 	// Clipping
@@ -89,7 +94,8 @@ void main() {
 		clip_radius_top_left,
 		clip_radius_top_right,
 		clip_radius_bottom_left,
-		clip_radius_bottom_right
+		clip_radius_bottom_right,
+		clip_exponent
 	);
 
 	gl_FragColor = color * alpha * quad_corner_alpha * clip_corner_alpha;

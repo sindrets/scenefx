@@ -1055,6 +1055,7 @@ struct wlr_scene_shadow *wlr_scene_shadow_create(struct wlr_scene_tree *parent,
 	scene_shadow->width = width;
 	scene_shadow->height = height;
 	scene_shadow->corner_radius = corner_radius;
+	scene_shadow->corner_exponent = CORNER_EXPONENT_CIRCLE;
 	scene_shadow->blur_sigma = blur_sigma;
 	memcpy(scene_shadow->color, color, sizeof(scene_shadow->color));
 	scene_shadow->clipped_region = clipped_region_get_default();
@@ -1080,6 +1081,17 @@ void wlr_scene_shadow_set_corner_radius(struct wlr_scene_shadow *shadow, int cor
 	}
 
 	shadow->corner_radius = corner_radius;
+	scene_node_update(&shadow->node, NULL);
+}
+
+void wlr_scene_shadow_set_corner_exponent(struct wlr_scene_shadow *shadow,
+		float exponent) {
+	exponent = corner_exponent_normalize(exponent);
+	if (shadow->corner_exponent == exponent) {
+		return;
+	}
+
+	shadow->corner_exponent = exponent;
 	scene_node_update(&shadow->node, NULL);
 }
 
@@ -2279,6 +2291,7 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 			},
 			.blur_sigma = scene_shadow->blur_sigma,
 			.corner_radius = scene_shadow->corner_radius * data->scale,
+			.corner_exponent = scene_shadow->corner_exponent,
 			.color = {
 				.r = scene_shadow->color[0],
 				.g = scene_shadow->color[1],

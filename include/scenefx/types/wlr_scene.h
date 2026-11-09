@@ -163,6 +163,8 @@ struct wlr_scene_shadow {
 	struct wlr_scene_node node;
 	int width, height;
 	int corner_radius;
+	/* Superellipse exponent of the shadow's corner curve. */
+	float corner_exponent;
 	float color[4];
 	float blur_sigma;
 
@@ -592,6 +594,15 @@ void wlr_scene_shadow_set_size(struct wlr_scene_shadow *shadow, int width, int h
  * Change the corner radius of an existing shadow node.
  */
 void wlr_scene_shadow_set_corner_radius(struct wlr_scene_shadow *shadow, int corner_radius);
+
+/**
+ * Change the superellipse exponent of an existing shadow node's corner curve.
+ *
+ * 2 is a circular corner, which is also what 0 (the default) means. Values
+ * above 2 square the corner off into a continuous-curvature curve.
+ */
+void wlr_scene_shadow_set_corner_exponent(struct wlr_scene_shadow *shadow,
+		float exponent);
 
 /**
  * Change the blur_sigma of an existing shadow node.

@@ -82,6 +82,9 @@ struct fx_render_box_shadow_options {
 
 	float blur_sigma;
 	int corner_radius;
+	/* Superellipse exponent of the shadow's corner curve, which all four
+	 * corners share with `corner_radius`. 0 means a circle. */
+	float corner_exponent;
 	struct wlr_render_color color;
 };
 
