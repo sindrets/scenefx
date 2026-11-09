@@ -98,9 +98,21 @@ void main() {
 	float blur_sigma = data.shadow_params.x;
 	float corner_radius = data.shadow_params.y;
 
+	// Cast the shadow from the box's exact edges, which is what the border
+	// around it is antialiased against. With the whole-pixel edges the shadow
+	// ends up to half a pixel away from where the border really is, and the
+	// border's own partially covered pixel shadows nothing, so it blends with
+	// whatever is behind the window instead of with the shadow.
+	vec2 shadow_position = data.position;
+	vec2 shadow_size = data.size;
+	if (data.box_edges_valid != 0.0) {
+		shadow_position = data.box_edges.xy;
+		shadow_size = data.box_edges.zw - data.box_edges.xy;
+	}
+
 	float shadow_alpha = data.color.a * rounded_box_shadow(
-		data.position + blur_sigma,
-		data.position + data.size - blur_sigma,
+		shadow_position + blur_sigma,
+		shadow_position + shadow_size - blur_sigma,
 		gl_FragCoord.xy,
 		blur_sigma * 0.5,
 		corner_radius);

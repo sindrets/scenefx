@@ -2252,17 +2252,29 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 		struct wlr_box shadow_clipped_region_box = scene_shadow->clipped_region.area;
 		struct fx_corner_radii shadow_clipped_corners = scene_shadow->clipped_region.corners;
 
+		// Exact device-pixel area of the hole, so the shadow's inner edge is
+		// antialiased against the same line the border is drawn on.
+		struct wlr_fbox shadow_clipped_frac_area = {
+			.x = shadow_clipped_region_box.x + x,
+			.y = shadow_clipped_region_box.y + y,
+			.width = shadow_clipped_region_box.width,
+			.height = shadow_clipped_region_box.height,
+		};
+
 		// Node relative -> Root relative
 		shadow_clipped_region_box.x += x;
 		shadow_clipped_region_box.y += y;
 
 		transform_output_box(&shadow_clipped_region_box, data);
+		transform_output_fbox(&shadow_clipped_frac_area, data);
 		fx_corner_radii_transform(node_transform, &shadow_clipped_corners);
 
 		struct fx_render_box_shadow_options shadow_options = {
 			.box = dst_box,
+			.frac_box = node_frac_box,
 			.clipped_region = {
 				.area = shadow_clipped_region_box,
+				.frac_area = shadow_clipped_frac_area,
 				.corners = fx_corner_radii_scale(shadow_clipped_corners, data->scale),
 			},
 			.blur_sigma = scene_shadow->blur_sigma,

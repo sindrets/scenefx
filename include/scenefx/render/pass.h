@@ -72,6 +72,10 @@ struct fx_render_rounded_rect_grad_options {
 
 struct fx_render_box_shadow_options {
 	struct wlr_box box;
+	/* Exact device-pixel box behind `box`, so the shadow is cast from where
+	 * the box really is and not from where it was rounded to. Leave empty for
+	 * whole-pixel boxes. */
+	struct wlr_fbox frac_box;
 	struct clipped_fregion clipped_region;
 	/* Clip region, leave NULL to disable clipping */
 	const pixman_region32_t *clip;

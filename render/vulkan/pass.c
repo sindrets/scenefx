@@ -985,8 +985,11 @@ static void vk_render_pass_add_box_shadow(struct fx_render_pass *fx_pass,
 	};
 
 	// The shader works in unrounded box space, using the box position/size to
-	// compute the rounded box shadow at each fragment.
-	push_rounding_data(&shadow_pcr_data.base.corner_rounding, &box,
+	// compute the rounded box shadow at each fragment. Give it the exact box for
+	// the position and size too, so the shadow is cast from where the box really
+	// is rather than from where it was rounded to.
+	push_frac_rounding_data(&shadow_pcr_data.base.corner_rounding, &box,
+		&options->frac_box,
 		&(struct fx_corner_fradii){
 			.top_left = options->corner_radius,
 			.top_right = options->corner_radius,
