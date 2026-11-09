@@ -81,7 +81,10 @@ struct fx_render_box_shadow_options {
 	const pixman_region32_t *clip;
 
 	float blur_sigma;
-	int corner_radius;
+	/* Device-pixel corner radius. Fractional under a fractional output scale,
+	 * which is why it is not an int: truncating it would put the shadow's
+	 * corner a fraction of a pixel away from the border's. */
+	float corner_radius;
 	/* Superellipse exponent of the shadow's corner curve, which all four
 	 * corners share with `corner_radius`. 0 means a circle. */
 	float corner_exponent;
