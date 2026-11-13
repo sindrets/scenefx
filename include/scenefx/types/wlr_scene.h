@@ -27,6 +27,7 @@
 #include <wlr/types/wlr_linux_dmabuf_v1.h>
 #include <wlr/util/addon.h>
 #include <wlr/util/box.h>
+#include <wlr/util/edges.h>
 
 #include "scenefx/types/fx/blur_data.h"
 #include "scenefx/types/fx/clipped_region.h"
@@ -156,6 +157,15 @@ struct wlr_scene_rect {
 	struct fx_corner_radii corners;
 	bool accepts_input;
 	struct clipped_region clipped_region;
+
+	/* Edges that must land on whole device pixels, as a bitmask of
+	 * enum wlr_edges. A rect's extent is whole logical pixels, but where it
+	 * meets another node at a fractional output scale the two edges fall
+	 * across the same device pixel and each fades it by its own coverage.
+	 * Two fades do not add up to one, so whatever is behind shows through the
+	 * pixel the two share. Snapping one of the edges outwards makes that node
+	 * own the pixel outright. See wlr_scene_rect_set_snap_edges(). */
+	uint32_t snap_edges;
 };
 
 /** A scene-graph node displaying a shadow */
@@ -578,6 +588,26 @@ void wlr_scene_rect_set_corner_radii(struct wlr_scene_rect *rect, struct fx_corn
  */
 void wlr_scene_rect_set_clipped_region(struct wlr_scene_rect *rect,
 		struct clipped_region clipped_region);
+
+/**
+ * Sets which of the rect's edges are snapped outwards to whole device pixels,
+ * as a bitmask of enum wlr_edges.
+ *
+ * A rect's size is whole logical pixels, so at a fractional output scale its
+ * edges land between device pixels and the shader fades the pixel they cross.
+ * That is what antialiases the shape, and it is right for an edge that meets
+ * the background. It is wrong for an edge that abuts another node: both fade
+ * the same device pixel by their own coverage, the two fades compose instead
+ * of adding up to one, and the pixel ends up showing what is behind both of
+ * them - a one-pixel line of background along the seam.
+ *
+ * Snapping an edge outwards by less than a device pixel makes this node cover
+ * that pixel outright, so it wins over whatever the other node drew there.
+ * Only snap the edge that is drawn on top of the other; snapping an edge that
+ * lies under a neighbour would just paint over the neighbour instead.
+ */
+void wlr_scene_rect_set_snap_edges(struct wlr_scene_rect *rect,
+		uint32_t edges);
 
 /**
  * Change the color of an existing rectangle node.

@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <math.h>
 #include <pixman.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -514,6 +515,38 @@ static void transform_output_fbox(struct wlr_fbox *box, const struct render_data
 	wlr_fbox_transform(box, box, transform, data->trans_width, data->trans_height);
 }
 
+// Fractional device-pixel box of a rect, optionally with some of its edges
+// snapped outwards to whole device pixels first.
+//
+// The snap happens in the scaled-but-untransformed space, so an edge keeps the
+// meaning it has in the node's own coordinates no matter how the output is
+// rotated or flipped.
+static void rect_frac_box(struct wlr_fbox *box, const struct wlr_box *node_box,
+		uint32_t snap_edges, const struct render_data *data) {
+	box->x = node_box->x * data->scale;
+	box->y = node_box->y * data->scale;
+	box->width = node_box->width * data->scale;
+	box->height = node_box->height * data->scale;
+
+	if (snap_edges & WLR_EDGE_LEFT) {
+		box->x = floorf(box->x);
+	}
+	if (snap_edges & WLR_EDGE_TOP) {
+		box->y = floorf(box->y);
+	}
+	// The far edges move the size, not the origin, so a snapped pair never
+	// drags the box away from the position the caller asked for.
+	if (snap_edges & WLR_EDGE_RIGHT) {
+		box->width = ceilf(box->x + box->width) - box->x;
+	}
+	if (snap_edges & WLR_EDGE_BOTTOM) {
+		box->height = ceilf(box->y + box->height) - box->y;
+	}
+
+	enum wl_output_transform transform = wlr_output_transform_invert(data->transform);
+	wlr_fbox_transform(box, box, transform, data->trans_width, data->trans_height);
+}
+
 // Integer box covering the whole of a fractional box, so every partially
 // covered pixel ends up inside the rendered area and can be blended into by the
 // coverage the shader computes from the fractional edges.
@@ -950,6 +983,7 @@ struct wlr_scene_rect *wlr_scene_rect_create(struct wlr_scene_tree *parent,
 	scene_rect->corners = (struct fx_corner_radii){0};
 	scene_rect->accepts_input = true;
 	scene_rect->clipped_region = clipped_region_get_default();
+	scene_rect->snap_edges = WLR_EDGE_NONE;
 
 	scene_node_update(&scene_rect->node, NULL);
 
@@ -1775,6 +1809,16 @@ void wlr_scene_buffer_set_clipped_region(struct wlr_scene_buffer *scene_buffer,
 	scene_node_update(&scene_buffer->node, NULL);
 }
 
+void wlr_scene_rect_set_snap_edges(struct wlr_scene_rect *rect,
+		uint32_t edges) {
+	if (rect->snap_edges == edges) {
+		return;
+	}
+
+	rect->snap_edges = edges;
+	scene_node_update(&rect->node, NULL);
+}
+
 static struct wlr_texture *scene_buffer_get_texture(
 		struct wlr_scene_buffer *scene_buffer, struct wlr_renderer *renderer) {
 	if (scene_buffer->buffer == NULL || scene_buffer->texture != NULL) {
@@ -2137,8 +2181,16 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 		fx_corner_radii_transform(node_transform, &rect_clipped_corners);
 
 		// Exact device-pixel geometry, so the shader can antialias edges that
-		// miss the pixel grid instead of snapping them.
-		struct wlr_fbox dst_frac_box = node_frac_box;
+		// miss the pixel grid instead of snapping them. Edges the caller asked
+		// to snap land on the grid, so they get no fade at all.
+		struct wlr_box node_box = {
+			.x = x,
+			.y = y,
+			.width = node_width,
+			.height = node_height,
+		};
+		struct wlr_fbox dst_frac_box;
+		rect_frac_box(&dst_frac_box, &node_box, scene_rect->snap_edges, data);
 		// Render over every pixel the exact box partly covers, otherwise the
 		// coverage the shader computes for them would be clipped away.
 		fbox_to_cover_box(&dst_box, &dst_frac_box);
