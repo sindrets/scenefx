@@ -171,6 +171,13 @@ static void setup_blending(enum wlr_render_blend_mode mode) {
 // Maps the region's keep_inside/soft pair onto the integer the shaders switch
 // on. Must match the CLIP_* defines in the shaders' corner_alpha.
 static int clip_region_mode_id(const struct clipped_fregion *fregion) {
+	/* An empty region clips nothing. Only the cutout spelling says that - a
+	 * keep-inside mode over no area keeps nothing at all - and a buffer with no
+	 * clip does set an empty region, so an empty area has to resolve to the
+	 * cutout however keep_inside is set. */
+	if (wlr_box_empty(&fregion->area)) {
+		return 0;
+	}
 	if (!fregion->keep_inside) {
 		return 0;
 	}

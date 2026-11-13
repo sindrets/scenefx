@@ -138,6 +138,11 @@ static bool apply_clip_region(pixman_region32_t *clip_region,
 // Maps the region's keep_inside/soft pair onto the float the shaders compare
 // against their CLIP_* defines. Must agree with corner_alpha.glsl.
 static float clip_region_mode(const struct clipped_fregion *fregion) {
+	/* See the GLES2 copy: an empty region clips nothing, which only the cutout
+	 * spelling expresses. */
+	if (wlr_box_empty(&fregion->area)) {
+		return 0.0f;
+	}
 	if (!fregion->keep_inside) {
 		return 0.0f;
 	}
