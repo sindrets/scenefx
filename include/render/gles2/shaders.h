@@ -44,6 +44,8 @@ struct quad_shader {
 		GLint clip_position;
 		struct shader_corner_radii clip_radius;
 		GLint clip_box_edges;
+		// How the region applies: 0 cutout, 1 keep inside, 2 keep inside soft.
+		GLint clip_mode;
 	} effects;
 };
 
@@ -83,6 +85,8 @@ struct quad_round_shader {
 	GLint clip_position;
 	struct shader_corner_radii clip_radius;
 	GLint clip_box_edges;
+	// How the region applies: 0 cutout, 1 keep inside, 2 keep inside soft.
+	GLint clip_mode;
 };
 
 bool link_quad_round_program(struct quad_round_shader *shader);
@@ -136,6 +140,8 @@ struct tex_shader {
 		GLint clip_position;
 		struct shader_corner_radii clip_radius;
 		GLint clip_box_edges;
+		// How the region applies: 0 cutout, 1 keep inside, 2 keep inside soft.
+		GLint clip_mode;
 	} effects;
 };
 

@@ -148,9 +148,31 @@ static __always_inline struct fx_corner_radii fx_corner_radii_pick(struct fx_cor
 
 bool fx_corner_radii_is_empty(const struct fx_corner_radii* corners);
 
+/* A clip that *keeps* the inside of `area` instead of cutting it out.
+ *
+ * The cutout form holds down everything outside the region, which is what a
+ * border needs: it must not paint over the surface drawn inside its hole. A
+ * keep-inside clip is the opposite: the node paints only where the region
+ * covers it, and fades out across the region's edge.
+ *
+ * `soft` is what makes it usable for a client surface meeting a rounded
+ * border. The shape inside a border's hole fades by its own coverage so the
+ * seam antialiases, but that only works if the surface is clipped to the same
+ * curve. A hard keep-inside clip snaps to whole pixels and leaves a hard line
+ * where the curve crosses them; a soft one fades by the region's own corner
+ * coverage, which is the same coverage the border's hole uses. */
 struct clipped_region {
 	struct wlr_box area;
 	struct fx_corner_radii corners;
+	/* Fade across the region's edge by its own corner coverage instead of
+	 * cutting hard at it, so a buffer clipped to a curve blends into whatever
+	 * it is drawn over. Corners are antialiased as a cutout regardless; this
+	 * only matters for the buffer clip, which keeps what is inside.
+	 *
+	 * A rect cuts the region out of itself rather than being clipped to it, and
+	 * a cutout must stay hard (the shape inside supplies its own fade), so this
+	 * is ignored there. */
+	bool soft;
 };
 
 struct clipped_region clipped_region_get_default(void);

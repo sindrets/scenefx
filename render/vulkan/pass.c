@@ -102,6 +102,17 @@ static bool apply_clip_region(pixman_region32_t *clip_region,
 		return false;
 	}
 
+	if (fregion->keep_inside) {
+		// The region's bounding box alone: insetting by the corner radii, as
+		// the cutout path does, would eat into the shape we are keeping.
+		struct wlr_box area = fregion->area;
+		pixman_region32_t inside;
+		pixman_region32_init_rect(&inside, area.x, area.y, area.width, area.height);
+		pixman_region32_intersect(clip_region, clip_region, &inside);
+		pixman_region32_fini(&inside);
+		return true;
+	}
+
 	const struct fx_corner_fradii *corners = &fregion->corners;
 	struct wlr_fbox area = clipped_fregion_frac_area(fregion);
 
@@ -122,6 +133,15 @@ static bool apply_clip_region(pixman_region32_t *clip_region,
 	pixman_region32_fini(&user_clip_region);
 
 	return true;
+}
+
+// Maps the region's keep_inside/soft pair onto the float the shaders compare
+// against their CLIP_* defines. Must agree with corner_alpha.glsl.
+static float clip_region_mode(const struct clipped_fregion *fregion) {
+	if (!fregion->keep_inside) {
+		return 0.0f;
+	}
+	return fregion->soft ? 2.0f : 1.0f;
 }
 
 static void push_rounding_data(struct vk_shader_rounding_data *data,
@@ -1873,6 +1893,7 @@ static void vk_render_pass_add_texture(struct fx_render_pass *fx_pass,
 	push_frac_rounding_data(&tex_pcr_data.clipping,
 		&fx_options->clipped_region.area, &tex_clipped_frac_area,
 		&fx_options->clipped_region.corners);
+	tex_pcr_data.clipping.clip_mode = clip_region_mode(&fx_options->clipped_region);
 
 	pixman_region32_t clip_region;
 	get_clip_region(pass, options->clip, &clip_region);

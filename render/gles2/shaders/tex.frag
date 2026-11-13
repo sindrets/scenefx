@@ -49,6 +49,9 @@ uniform float clip_radius_bottom_left;
 uniform float clip_radius_bottom_right;
 uniform float clip_exponent;
 uniform vec4 clip_box_edges;
+// 0 cuts the region out, 1 keeps only what is inside it, 2 keeps it and fades
+// across its edge. See clipped_fregion.
+uniform int clip_mode;
 #endif
 
 uniform bool discard_transparent;
@@ -69,6 +72,9 @@ float rounded_box_coverage(vec4 edges, vec2 size, vec2 position,
 float cutout_coverage(vec4 edges, vec2 size, vec2 position,
 		float radius_tl, float radius_tr, float radius_bl, float radius_br,
 		float exponent);
+float clip_coverage(int mode, vec4 edges, vec2 size, vec2 position,
+		float radius_tl, float radius_tr, float radius_bl, float radius_br,
+		float exponent);
 #endif
 
 void main() {
@@ -87,7 +93,8 @@ void main() {
 	);
 
 	// Clipping
-	float clip_corner_alpha = cutout_coverage(
+	float clip_corner_alpha = clip_coverage(
+		clip_mode,
 		clip_box_edges,
 		clip_size,
 		clip_position,

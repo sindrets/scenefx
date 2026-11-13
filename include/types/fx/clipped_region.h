@@ -33,6 +33,12 @@ struct clipped_fregion {
      * used as is. */
     struct wlr_fbox frac_area;
     struct fx_corner_fradii corners;
+    /* Keep what is inside the region instead of cutting it out. Buffers clip
+     * this way, everything else cuts a hole. */
+    bool keep_inside;
+    /* Fade across the region's edge by its own corner coverage instead of
+     * cutting hard at it. Only meaningful together with keep_inside. */
+    bool soft;
 };
 
 static __always_inline struct wlr_fbox box_to_fbox(const struct wlr_box *box) {

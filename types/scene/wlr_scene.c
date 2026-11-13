@@ -379,6 +379,33 @@ static void scene_node_opaque_region(struct wlr_scene_node *node, int x, int y,
 			pixman_region32_fini(&corners);
 		}
 
+		// Only the part of the buffer inside its clip is opaque. A soft clip
+		// additionally fades along the region's edge, so the boundary pixels
+		// must not count as covered either.
+		if (!wlr_box_empty(&scene_buffer->clipped_region.area)) {
+			struct wlr_box *clip = &scene_buffer->clipped_region.area;
+			struct wlr_box inside = {
+				.x = clip->x + x,
+				.y = clip->y + y,
+				.width = clip->width,
+				.height = clip->height,
+			};
+			pixman_region32_t clipped;
+			pixman_region32_init_rect(&clipped, inside.x, inside.y,
+					inside.width, inside.height);
+			pixman_region32_intersect(opaque, opaque, &clipped);
+			pixman_region32_fini(&clipped);
+
+			if (!fx_corner_radii_is_empty(&scene_buffer->clipped_region.corners)) {
+				struct fx_corner_radii corners =
+					scene_buffer->clipped_region.corners;
+				pixman_region32_t corner_region = create_corner_location_region(
+					corners, inside.x, inside.y, inside.width, inside.height);
+				pixman_region32_subtract(opaque, opaque, &corner_region);
+				pixman_region32_fini(&corner_region);
+			}
+		}
+
 		return;
 	} else if (node->type == WLR_SCENE_NODE_SHADOW) {
 		// TODO: test & handle case of blur sigma = 0 and color[3] = 1?
@@ -1416,7 +1443,7 @@ struct wlr_scene_buffer *wlr_scene_buffer_create(struct wlr_scene_tree *parent,
 	scene_buffer->opacity = 1;
 
 	scene_buffer->corners = corner_radii_none();
-
+	scene_buffer->clipped_region = clipped_region_get_default();
 	scene_buffer->blur = linked_node_init();
 
 	scene_buffer_set_buffer(scene_buffer, buffer);
@@ -1729,6 +1756,22 @@ void wlr_scene_buffer_set_corner_radii(struct wlr_scene_buffer *scene_buffer,
 	}
 
 	scene_buffer->corners = corner_radii;
+	scene_node_update(&scene_buffer->node, NULL);
+}
+
+void wlr_scene_buffer_set_clipped_region(struct wlr_scene_buffer *scene_buffer,
+	struct clipped_region clipped_region) {
+	if (fx_corner_radii_eq(scene_buffer->clipped_region.corners,
+						  clipped_region.corners) &&
+			wlr_box_equal(&scene_buffer->clipped_region.area,
+						  &clipped_region.area) &&
+			scene_buffer->clipped_region.soft == clipped_region.soft) {
+		return;
+	}
+
+	scene_buffer->clipped_region = clipped_region;
+	/* A clip shrinks the node's painted area, so whatever was opaque before may
+	 * not be any more. The update picks up the new opaque region. */
 	scene_node_update(&scene_buffer->node, NULL);
 }
 
@@ -2191,6 +2234,29 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 			WLR_COLOR_TRANSFER_FUNCTION_SRGB, &srgb_lum);
 		float luminance_multiplier = get_luminance_multiplier(&src_lum, &srgb_lum);
 
+		/* The clip keeps the buffer inside a region, so it is expressed relative
+		 * to the node and has to travel to output coordinates like the node's own
+		 * box does. An empty area means no clip at all. */
+		struct wlr_box buffer_clipped_region_box =
+			scene_buffer->clipped_region.area;
+		struct fx_corner_radii buffer_clipped_corners =
+			scene_buffer->clipped_region.corners;
+		struct wlr_fbox buffer_clipped_frac_area = {0};
+		if (!wlr_box_empty(&buffer_clipped_region_box)) {
+			buffer_clipped_region_box.x += x;
+			buffer_clipped_region_box.y += y;
+			transform_output_box(&buffer_clipped_region_box, data);
+			fx_corner_radii_transform(transform, &buffer_clipped_corners);
+
+			buffer_clipped_frac_area = (struct wlr_fbox){
+				.x = scene_buffer->clipped_region.area.x + x,
+				.y = scene_buffer->clipped_region.area.y + y,
+				.width = scene_buffer->clipped_region.area.width,
+				.height = scene_buffer->clipped_region.area.height,
+			};
+			transform_output_fbox(&buffer_clipped_frac_area, data);
+		}
+
 		struct wlr_box dst_cover_box = dst_box;
 		fbox_to_cover_box(&dst_cover_box, &node_frac_box);
 		struct fx_render_texture_options tex_options = {
@@ -2208,7 +2274,8 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 				// blend there.
 				.blend_mode = !data->output->scene->calculate_visibility ||
 					!pixman_region32_empty(&opaque) ||
-					fbox_has_fractional_edges(&node_frac_box) ?
+					fbox_has_fractional_edges(&node_frac_box) ||
+					!wlr_box_empty(&buffer_clipped_region_box) ?
 					WLR_RENDER_BLEND_MODE_PREMULTIPLIED : WLR_RENDER_BLEND_MODE_NONE,
 				.transfer_function = scene_buffer->transfer_function,
 				.primaries = scene_buffer->primaries != 0 ? &primaries : NULL,
@@ -2221,7 +2288,16 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 			.clip_box = &dst_box,
 			.corners = fx_corner_radii_scale(buffer_corners, data->scale),
 			.dst_frac_box = node_frac_box,
-			.clipped_region = {0},
+			.clipped_region = {
+				.area = buffer_clipped_region_box,
+				.frac_area = buffer_clipped_frac_area,
+				.corners = fx_corner_radii_scale(buffer_clipped_corners,
+												 data->scale),
+				/* A buffer stays *inside* its clip; only rects and shadows
+				 * cut a hole with it. */
+				.keep_inside = true,
+				.soft = scene_buffer->clipped_region.soft,
+			},
 		};
 
 		// Route through the fx pass whenever the buffer's exact edges miss the

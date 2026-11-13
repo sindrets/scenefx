@@ -275,6 +275,14 @@ struct wlr_scene_buffer {
 	} WLR_PRIVATE;
 
 	struct fx_corner_radii corners;
+
+	/* Region the buffer is clipped to. Unlike a rect's, this one KEEPS what is
+	 * inside it and drops what is outside: a buffer is the thing that has to
+	 * fit into a hole somewhere else, so the hole is what it is given, not
+	 * something to cut out of itself. Set it with
+	 * wlr_scene_buffer_set_clipped_region(). */
+	struct clipped_region clipped_region;
+
 	struct linked_node blur;
 };
 
@@ -847,6 +855,20 @@ void wlr_scene_buffer_set_corner_radius(struct wlr_scene_buffer *scene_buffer,
 void wlr_scene_buffer_set_corner_radii(struct wlr_scene_buffer *scene_buffer,
 	struct fx_corner_radii corner_radii);
 
+/**
+ * Sets the region this buffer is clipped to. The region KEEPS the buffer
+ * inside it and drops everything outside, the opposite of the cutout a rect's
+ * clipped region performs: the caller passes the hole the buffer has to fit
+ * into. Coordinates are those of the buffer itself, i.e. relative to its
+ * top-left corner.
+ *
+ * With `soft` set the buffer fades out across the region's edge by the
+ * region's own corner coverage, which lets a client surface blend into a
+ * rounded border instead of ending on a hard stair-stepped line. A NULL or
+ * empty region disables clipping.
+ */
+void wlr_scene_buffer_set_clipped_region(struct wlr_scene_buffer *scene_buffer,
+	struct clipped_region clipped_region);
 void wlr_scene_buffer_set_transfer_function(struct wlr_scene_buffer *scene_buffer,
 	enum wlr_color_transfer_function transfer_function);
 

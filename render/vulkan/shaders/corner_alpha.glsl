@@ -1,3 +1,9 @@
+// How a clipped region applies, matching CLIP_* in the GLES2 shaders'
+// corner_alpha.frag and keep_inside/soft in struct clipped_fregion.
+#define CLIP_CUTOUT 0
+#define CLIP_INSIDE 1
+#define CLIP_INSIDE_SOFT 2
+
 // Distance to a box corner's curve, in pixels: negative inside the shape,
 // positive outside it. `q` is the offset from the corner's centre, positive
 // towards the corner's own square (see corner_sdf), and `radius` is the size of
@@ -130,6 +136,37 @@ float cutout_coverage(vec4 edges, vec2 size, vec2 position,
 		float exponent) {
 	return rounded_box_coverage(edges, size, position,
 		radius_tl, radius_tr, radius_bl, radius_br, exponent) >= 1.0 ? 0.0 : 1.0;
+}
+
+// The keep-inside counterpart of cutout_coverage(): 1.0 inside the region, 0.0
+// outside it.
+//
+// A buffer is clipped this way. Here the fade IS wanted, unlike the cutout
+// above: a client surface drawn into a border's hole has to fade by exactly the
+// coverage the hole used, otherwise the seam between surface and border is
+// either a hard stair-step (a hard clip) or a visible line of the background
+// between them (a clip following the curve with a different ramp). The border's
+// ring is solid underneath either way, so fading the surface lets the ring show
+// through by the complementary amount.
+float inside_coverage(vec4 edges, vec2 size, vec2 position,
+		float radius_tl, float radius_tr, float radius_bl, float radius_br,
+		float exponent, float soft) {
+	float cov = rounded_box_coverage(edges, size, position,
+		radius_tl, radius_tr, radius_bl, radius_br, exponent);
+	return soft != 0.0 ? cov : (cov >= 1.0 ? 1.0 : 0.0);
+}
+
+// Dispatches on the region's clip mode.
+float clip_coverage(float mode, vec4 edges, vec2 size, vec2 position,
+		float radius_tl, float radius_tr, float radius_bl, float radius_br,
+		float exponent) {
+	if (mode == CLIP_CUTOUT) {
+		return cutout_coverage(edges, size, position,
+			radius_tl, radius_tr, radius_bl, radius_br, exponent);
+	}
+	return inside_coverage(edges, size, position,
+		radius_tl, radius_tr, radius_bl, radius_br, exponent,
+		mode == CLIP_INSIDE_SOFT ? 1.0 : 0.0);
 }
 
 // Note: Returns 0.0 if outside, 1.0 if inside the bounds. The is_cutout parameter

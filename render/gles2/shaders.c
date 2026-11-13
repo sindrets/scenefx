@@ -174,7 +174,7 @@ bool link_quad_program(struct quad_shader *shader, bool clip) {
 	shader->effects.clip_radius.bottom_right = glGetUniformLocation(prog, "clip_radius_bottom_right");
 	shader->effects.clip_radius.exponent = glGetUniformLocation(prog, "clip_exponent");
 	shader->effects.clip_box_edges = glGetUniformLocation(prog, "clip_box_edges");
-
+	shader->effects.clip_mode = glGetUniformLocation(prog, "clip_mode");
 	return true;
 }
 
@@ -239,6 +239,7 @@ bool link_quad_round_program(struct quad_round_shader *shader) {
 	shader->clip_radius.bottom_right = glGetUniformLocation(prog, "clip_radius_bottom_right");
 	shader->clip_radius.exponent = glGetUniformLocation(prog, "clip_exponent");
 	shader->clip_box_edges = glGetUniformLocation(prog, "clip_box_edges");
+	shader->clip_mode = glGetUniformLocation(prog, "clip_mode");
 
 	return true;
 }
@@ -329,7 +330,7 @@ bool link_tex_program(struct tex_shader *shader, enum fx_tex_shader_source sourc
 	shader->effects.clip_radius.bottom_right = glGetUniformLocation(prog, "clip_radius_bottom_right");
 	shader->effects.clip_radius.exponent = glGetUniformLocation(prog, "clip_exponent");
 	shader->effects.clip_box_edges = glGetUniformLocation(prog, "clip_box_edges");
-
+	shader->effects.clip_mode = glGetUniformLocation(prog, "clip_mode");
 	return true;
 }
 

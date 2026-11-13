@@ -168,29 +168,56 @@ static void setup_blending(enum wlr_render_blend_mode mode) {
 	}
 }
 
+// Maps the region's keep_inside/soft pair onto the integer the shaders switch
+// on. Must match the CLIP_* defines in the shaders' corner_alpha.
+static int clip_region_mode_id(const struct clipped_fregion *fregion) {
+	if (!fregion->keep_inside) {
+		return 0;
+	}
+	return fregion->soft ? 2 : 1;
+}
+
+// Narrows the integer scissor to the clipped region. The corners are only
+// approximated here (the shader does the exact curve), but cutouts and
+// keep-inside regions want opposite things: a cutout is subtracted from the
+// paint area, while keep-inside keeps only the intersection.
 static bool apply_clip_region(pixman_region32_t *clip_region,
-		const struct wlr_box *clipped_region_box, const struct fx_corner_fradii *corners) {
-	if (!wlr_box_empty(clipped_region_box)) {
-		float top = fmax(corners->top_left, corners->top_right);
-		float bottom = fmax(corners->bottom_left, corners->bottom_right);
-		float left = fmax(corners->top_left, corners->bottom_left);
-		float right = fmax(corners->top_right, corners->bottom_right);
+		const struct clipped_fregion *fregion) {
+	const struct wlr_box *clipped_region_box = &fregion->area;
+	if (wlr_box_empty(clipped_region_box)) {
+		return false;
+	}
 
-		// Round inwards: truncating would overlap the top-left rounded corners
-		int x1 = ceil(clipped_region_box->x + left * 0.3);
-		int y1 = ceil(clipped_region_box->y + top * 0.3);
-		int x2 = floor(clipped_region_box->x + clipped_region_box->width - right * 0.3);
-		int y2 = floor(clipped_region_box->y + clipped_region_box->height - bottom * 0.3);
-
-		pixman_region32_t user_clip_region;
-		pixman_region32_init_rect(&user_clip_region, x1, y1,
-			x2 > x1 ? x2 - x1 : 0, y2 > y1 ? y2 - y1 : 0);
-		pixman_region32_subtract(clip_region, clip_region, &user_clip_region);
-		pixman_region32_fini(&user_clip_region);
+	if (fregion->keep_inside) {
+		// The region's bounding box alone: insetting by the corner radii, as
+		// the cutout path does, would eat into the shape we are keeping.
+		pixman_region32_t inside;
+		pixman_region32_init_rect(&inside, clipped_region_box->x,
+			clipped_region_box->y, clipped_region_box->width,
+			clipped_region_box->height);
+		pixman_region32_intersect(clip_region, clip_region, &inside);
+		pixman_region32_fini(&inside);
 		return true;
 	}
 
-	return false;
+	const struct fx_corner_fradii *corners = &fregion->corners;
+	float top = fmax(corners->top_left, corners->top_right);
+	float bottom = fmax(corners->bottom_left, corners->bottom_right);
+	float left = fmax(corners->top_left, corners->bottom_left);
+	float right = fmax(corners->top_right, corners->bottom_right);
+
+	// Round inwards: truncating would overlap the top-left rounded corners
+	int x1 = ceil(clipped_region_box->x + left * 0.3);
+	int y1 = ceil(clipped_region_box->y + top * 0.3);
+	int x2 = floor(clipped_region_box->x + clipped_region_box->width - right * 0.3);
+	int y2 = floor(clipped_region_box->y + clipped_region_box->height - bottom * 0.3);
+
+	pixman_region32_t user_clip_region;
+	pixman_region32_init_rect(&user_clip_region, x1, y1,
+		x2 > x1 ? x2 - x1 : 0, y2 > y1 ? y2 - y1 : 0);
+	pixman_region32_subtract(clip_region, clip_region, &user_clip_region);
+	pixman_region32_fini(&user_clip_region);
+	return true;
 }
 
 ///
@@ -372,10 +399,9 @@ static void gles2_render_pass_add_texture(struct fx_render_pass *fx_pass,
 	} else {
 		pixman_region32_init_rect(&clip_region, dst_box.x, dst_box.y, dst_box.width, dst_box.height);
 	}
-	const struct wlr_box clipped_region_box = fx_options->clipped_region.area;
 	struct fx_corner_fradii clipped_region_corners = fx_options->clipped_region.corners;
 	struct wlr_fbox clipped_frac_area = clipped_fregion_frac_area(&fx_options->clipped_region);
-	apply_clip_region(&clip_region, &clipped_region_box, &clipped_region_corners);
+	apply_clip_region(&clip_region, &fx_options->clipped_region);
 	// Exact device-pixel edges of the shape being drawn, so the tex shader
 	// antialiases an edge that misses the pixel grid.
 	if (wlr_fbox_empty(&dst_frac_box)) {
@@ -417,6 +443,8 @@ static void gles2_render_pass_add_texture(struct fx_render_pass *fx_pass,
 		glUniform2f(shader->effects.clip_position, clipped_frac_area.x, clipped_frac_area.y);
 		uniform_corner_radii_set(&shader->effects.clip_radius, &clipped_region_corners);
 		uniform_box_edges(shader->effects.clip_box_edges, &clipped_frac_area);
+		glUniform1i(shader->effects.clip_mode,
+			clip_region_mode_id(&fx_options->clipped_region));
 	}
 
 	set_proj_matrix(shader->proj, pass->projection_matrix, &dst_box);
@@ -444,7 +472,6 @@ static void gles2_render_pass_add_rect(struct fx_render_pass *fx_pass,
 	wlr_render_rect_options_get_box(options, wlr_buffer, &box);
 
 	const bool should_clip = clipped_fregion_is_valid(&fx_options->clipped_region);
-	const struct wlr_box *clipped_region_box = &fx_options->clipped_region.area;
 	const struct fx_corner_fradii *clipped_region_corners = &fx_options->clipped_region.corners;
 
 	// Exact device-pixel edges, so the shader fades the rect out over the
@@ -466,14 +493,16 @@ static void gles2_render_pass_add_rect(struct fx_render_pass *fx_pass,
 		pixman_region32_init_rect(&clip_region, box.x, box.y, box.width, box.height);
 	}
 
-	apply_clip_region(&clip_region, clipped_region_box, clipped_region_corners);
+	apply_clip_region(&clip_region, &fx_options->clipped_region);
 
 	TRACY_BOTH_ZONES_START(&gles2_renderer->fx_renderer);
 	TRACY_ZONE_TEXT_f("Box (WxH, X, Y): %dx%d, %d, %d", box.width, box.height, box.x, box.y);
 	TRACY_ZONE_TEXT_f("Color RGBA: %f, %f, %f, %f", color->r, color->g, color->b, color->a);
 	TRACY_ZONE_TEXT_f("Clip Box (WxH, X, Y): %dx%d, %d, %d",
-			clipped_region_box->width, clipped_region_box->height,
-			clipped_region_box->x, clipped_region_box->y);
+			fx_options->clipped_region.area.width,
+			fx_options->clipped_region.area.height,
+			fx_options->clipped_region.area.x,
+			fx_options->clipped_region.area.y);
 	TRACY_ZONE_TEXT_f("Clip Box Corners (TL, TR, BL, BR): %f, %f, %f, %f",
 			clipped_region_corners->top_left,
 			clipped_region_corners->top_right,
@@ -495,6 +524,8 @@ static void gles2_render_pass_add_rect(struct fx_render_pass *fx_pass,
 		glUniform2f(shader->effects.clip_position, clipped_frac_area.x, clipped_frac_area.y);
 		uniform_corner_radii_set(&shader->effects.clip_radius, clipped_region_corners);
 		uniform_box_edges(shader->effects.clip_box_edges, &clipped_frac_area);
+		glUniform1i(shader->effects.clip_mode,
+			clip_region_mode_id(&fx_options->clipped_region));
 	}
 	render(&box, &clip_region, shader->pos_attrib);
 
@@ -581,9 +612,8 @@ static void gles2_render_pass_add_rounded_rect(struct fx_render_pass *fx_pass,
 	} else {
 		pixman_region32_init_rect(&clip_region, box.x, box.y, box.width, box.height);
 	}
-	const struct wlr_box *clipped_region_box = &fx_options->clipped_region.area;
 	const struct fx_corner_fradii *clipped_region_corners = &fx_options->clipped_region.corners;
-	apply_clip_region(&clip_region, clipped_region_box, clipped_region_corners);
+	apply_clip_region(&clip_region, &fx_options->clipped_region);
 
 	struct wlr_fbox frac_box = fx_options->frac_box;
 	if (wlr_fbox_empty(&frac_box)) {
@@ -594,8 +624,10 @@ static void gles2_render_pass_add_rounded_rect(struct fx_render_pass *fx_pass,
 	TRACY_BOTH_ZONES_START(&gles2_renderer->fx_renderer);
 	TRACY_ZONE_TEXT_f("Box (WxH, X, Y): %dx%d, %d, %d", box.width, box.height, box.x, box.y);
 	TRACY_ZONE_TEXT_f("Clip Box (WxH, X, Y): %dx%d, %d, %d",
-			clipped_region_box->width, clipped_region_box->height,
-			clipped_region_box->x, clipped_region_box->y);
+			fx_options->clipped_region.area.width,
+			fx_options->clipped_region.area.height,
+			fx_options->clipped_region.area.x,
+			fx_options->clipped_region.area.y);
 	TRACY_ZONE_TEXT_f("Clip Box Corners (TL, TR, BL, BR): %f, %f, %f, %f",
 			clipped_region_corners->top_left,
 			clipped_region_corners->top_right,
@@ -747,7 +779,7 @@ static void gles2_render_pass_add_box_shadow(struct fx_render_pass *fx_pass,
 	}
 	const struct wlr_box clipped_region_box = options->clipped_region.area;
 	struct fx_corner_fradii clipped_region_corners = options->clipped_region.corners;
-	apply_clip_region(&clip_region, &clipped_region_box, &clipped_region_corners);
+	apply_clip_region(&clip_region, &options->clipped_region);
 
 	TRACY_BOTH_ZONES_START(&gles2_renderer->fx_renderer);
 	TRACY_ZONE_TEXT_f("Box (WxH, X, Y): %dx%d, %d, %d", box.width, box.height, box.x, box.y);

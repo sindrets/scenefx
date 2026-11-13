@@ -31,7 +31,10 @@ layout(push_constant) uniform UBO {
 
 	float clip_box_edges_valid;
 	float clip_exponent;
-	vec2 _clip_pad;
+	// 0 cutout, 1 keep inside, 2 keep inside and fade across its edge.
+	// Packed into the old pad slot so the block layout is unchanged.
+	float clip_mode;
+	float _clip_pad;
 	vec4 clip_box_edges;
 } data;
 
@@ -133,8 +136,7 @@ void main() {
 	}
 	// Clipping
 	if ((EFFECTS & EFFECT_CLIPPING) == EFFECT_CLIPPING) {
-		color *= cutout_coverage(
-			data.clip_box_edges,
+		color *= clip_coverage(data.clip_mode, data.clip_box_edges,
 			data.clip_size,
 			data.clip_position,
 			data.clip_radius_top_left,

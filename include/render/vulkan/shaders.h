@@ -30,7 +30,10 @@ struct vk_shader_rounding_data {
 	float edges_valid;
 	// Superellipse exponent of the corner curve, see struct fx_corner_radii.
 	float exponent;
-	float _pad[2];
+	// How the region applies, matching the CLIP_* defines in corner_alpha.glsl:
+	// 0 cutout, 1 keep inside, 2 keep inside and fade across its edge.
+	float clip_mode;
+	float _pad;
 	float edges[4];
 };
 
