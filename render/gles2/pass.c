@@ -669,6 +669,8 @@ static void gles2_render_pass_add_rounded_rect(struct fx_render_pass *fx_pass,
 	glUniform2f(shader.clip_position, clipped_frac_area.x, clipped_frac_area.y);
 	uniform_corner_radii_set(&shader.clip_radius, clipped_region_corners);
 	uniform_box_edges(shader.clip_box_edges, &clipped_frac_area);
+	glUniform1i(shader.clip_mode,
+		clip_region_mode_id(&fx_options->clipped_region));
 
 	struct fx_corner_fradii corners = fx_options->corners;
 	uniform_corner_radii_set(&shader.radius, &corners);

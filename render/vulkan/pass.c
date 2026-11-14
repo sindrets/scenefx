@@ -502,6 +502,7 @@ static void vk_render_pass_add_rect(struct fx_render_pass *fx_pass,
 	push_frac_rounding_data(&quad_pcr_data.clipping,
 		&fx_options->clipped_region.area, &clipped_frac_area,
 		&fx_options->clipped_region.corners);
+	quad_pcr_data.clipping.clip_mode = clip_region_mode(&fx_options->clipped_region);
 
 	bind_pipeline(pass, pipeline->pipeline);
 	vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_VERTEX_BIT,
@@ -590,6 +591,7 @@ static void vk_render_pass_add_rounded_rect(struct fx_render_pass *fx_pass,
 	push_frac_rounding_data(&quad_pcr_data.clipping,
 		&fx_options->clipped_region.area, &rounded_clipped_frac_area,
 		&fx_options->clipped_region.corners);
+	quad_pcr_data.clipping.clip_mode = clip_region_mode(&fx_options->clipped_region);
 
 	bind_pipeline(pass, pipeline->pipeline);
 	vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_VERTEX_BIT,
@@ -888,6 +890,7 @@ static void vk_render_pass_add_grad_common(struct vk_render_pass *pass,
 		struct wlr_fbox clipped_frac_area = clipped_fregion_frac_area(clipped_region);
 		push_frac_rounding_data(&quad_pcr_data.clipping,
 			&clipped_region->area, &clipped_frac_area, &clipped_region->corners);
+		quad_pcr_data.clipping.clip_mode = clip_region_mode(clipped_region);
 	}
 
 	if (!bind_gradient(pass, layout, gradient)) {
@@ -1037,6 +1040,8 @@ static void vk_render_pass_add_box_shadow(struct fx_render_pass *fx_pass,
 	push_frac_rounding_data(&shadow_pcr_data.base.clipping,
 		&options->clipped_region.area, &shadow_clipped_frac_area,
 		&options->clipped_region.corners);
+	shadow_pcr_data.base.clipping.clip_mode =
+		clip_region_mode(&options->clipped_region);
 
 	bind_pipeline(pass, pipeline->pipeline);
 	vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_VERTEX_BIT,
