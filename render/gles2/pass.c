@@ -198,10 +198,16 @@ static bool apply_clip_region(pixman_region32_t *clip_region,
 	if (fregion->keep_inside) {
 		// The region's bounding box alone: insetting by the corner radii, as
 		// the cutout path does, would eat into the shape we are keeping.
+		//
+		// Grown by a pixel: this box is whole-pixel, the shader is what clips
+		// exactly, and a region edge that lands mid-pixel would otherwise have
+		// its boundary pixel dropped here - leaving the shader nothing to fade,
+		// which turns the kept shape's straight edge into a hard step while its
+		// corners still blend.
 		pixman_region32_t inside;
-		pixman_region32_init_rect(&inside, clipped_region_box->x,
-			clipped_region_box->y, clipped_region_box->width,
-			clipped_region_box->height);
+		pixman_region32_init_rect(&inside, clipped_region_box->x - 1,
+			clipped_region_box->y - 1, clipped_region_box->width + 2,
+			clipped_region_box->height + 2);
 		pixman_region32_intersect(clip_region, clip_region, &inside);
 		pixman_region32_fini(&inside);
 		return true;
