@@ -171,10 +171,8 @@ static void setup_blending(enum wlr_render_blend_mode mode) {
 // Maps the region's keep_inside/soft pair onto the integer the shaders switch
 // on. Must match the CLIP_* defines in the shaders' corner_alpha.
 static int clip_region_mode_id(const struct clipped_fregion *fregion) {
-	/* An empty region clips nothing. Only the cutout spelling says that - a
-	 * keep-inside mode over no area keeps nothing at all - and a buffer with no
-	 * clip does set an empty region, so an empty area has to resolve to the
-	 * cutout however keep_inside is set. */
+	/* An empty region clips nothing - only the cutout mode says that, and an
+	 * unclipped buffer sets exactly such a region. */
 	if (wlr_box_empty(&fregion->area)) {
 		return 0;
 	}
@@ -184,10 +182,8 @@ static int clip_region_mode_id(const struct clipped_fregion *fregion) {
 	return fregion->soft ? 2 : 1;
 }
 
-// Narrows the integer scissor to the clipped region. The corners are only
-// approximated here (the shader does the exact curve), but cutouts and
-// keep-inside regions want opposite things: a cutout is subtracted from the
-// paint area, while keep-inside keeps only the intersection.
+// Narrows the scissor to the clipped region; the shader does the exact curve.
+// A cutout is subtracted from the paint area, keep-inside kept by intersection.
 static bool apply_clip_region(pixman_region32_t *clip_region,
 		const struct clipped_fregion *fregion) {
 	const struct wlr_box *clipped_region_box = &fregion->area;
@@ -196,14 +192,9 @@ static bool apply_clip_region(pixman_region32_t *clip_region,
 	}
 
 	if (fregion->keep_inside) {
-		// The region's bounding box alone: insetting by the corner radii, as
-		// the cutout path does, would eat into the shape we are keeping.
-		//
-		// Grown by a pixel: this box is whole-pixel, the shader is what clips
-		// exactly, and a region edge that lands mid-pixel would otherwise have
-		// its boundary pixel dropped here - leaving the shader nothing to fade,
-		// which turns the kept shape's straight edge into a hard step while its
-		// corners still blend.
+		// Keep only the bounding box: insetting by the corner radii would eat
+		// into the kept shape. Grown by a pixel so an edge landing mid-pixel keeps
+		// its boundary pixel for the shader to fade.
 		pixman_region32_t inside;
 		pixman_region32_init_rect(&inside, clipped_region_box->x - 1,
 			clipped_region_box->y - 1, clipped_region_box->width + 2,

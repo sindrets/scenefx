@@ -158,13 +158,10 @@ struct wlr_scene_rect {
 	bool accepts_input;
 	struct clipped_region clipped_region;
 
-	/* Edges that must land on whole device pixels, as a bitmask of
-	 * enum wlr_edges. A rect's extent is whole logical pixels, but where it
-	 * meets another node at a fractional output scale the two edges fall
-	 * across the same device pixel and each fades it by its own coverage.
-	 * Two fades do not add up to one, so whatever is behind shows through the
-	 * pixel the two share. Snapping one of the edges outwards makes that node
-	 * own the pixel outright. See wlr_scene_rect_set_snap_edges(). */
+	/* Edges snapped outwards to whole device pixels, as a bitmask of enum
+	 * wlr_edges: where two abutting nodes both fade their shared edge pixel, the
+	 * fades don't add up to one - snapping makes this node own that pixel.
+	 * See wlr_scene_rect_set_snap_edges(). */
 	uint32_t snap_edges;
 };
 
@@ -286,11 +283,9 @@ struct wlr_scene_buffer {
 
 	struct fx_corner_radii corners;
 
-	/* Region the buffer is clipped to. Unlike a rect's, this one KEEPS what is
-	 * inside it and drops what is outside: a buffer is the thing that has to
-	 * fit into a hole somewhere else, so the hole is what it is given, not
-	 * something to cut out of itself. Set it with
-	 * wlr_scene_buffer_set_clipped_region(). */
+	/* Region the buffer is clipped to. Unlike a rect's, it KEEPS what is inside
+	 * and drops what is outside - the hole the buffer has to fit into.
+	 * Set it with wlr_scene_buffer_set_clipped_region(). */
 	struct clipped_region clipped_region;
 
 	struct linked_node blur;
@@ -591,20 +586,9 @@ void wlr_scene_rect_set_clipped_region(struct wlr_scene_rect *rect,
 
 /**
  * Sets which of the rect's edges are snapped outwards to whole device pixels,
- * as a bitmask of enum wlr_edges.
- *
- * A rect's size is whole logical pixels, so at a fractional output scale its
- * edges land between device pixels and the shader fades the pixel they cross.
- * That is what antialiases the shape, and it is right for an edge that meets
- * the background. It is wrong for an edge that abuts another node: both fade
- * the same device pixel by their own coverage, the two fades compose instead
- * of adding up to one, and the pixel ends up showing what is behind both of
- * them - a one-pixel line of background along the seam.
- *
- * Snapping an edge outwards by less than a device pixel makes this node cover
- * that pixel outright, so it wins over whatever the other node drew there.
- * Only snap the edge that is drawn on top of the other; snapping an edge that
- * lies under a neighbour would just paint over the neighbour instead.
+ * as a bitmask of enum wlr_edges: where an edge abuts another node, both fade
+ * the shared pixel by their own coverage, and snapping makes this node own it.
+ * Only snap an edge that is drawn on top of its neighbour.
  */
 void wlr_scene_rect_set_snap_edges(struct wlr_scene_rect *rect,
 		uint32_t edges);
@@ -886,16 +870,11 @@ void wlr_scene_buffer_set_corner_radii(struct wlr_scene_buffer *scene_buffer,
 	struct fx_corner_radii corner_radii);
 
 /**
- * Sets the region this buffer is clipped to. The region KEEPS the buffer
- * inside it and drops everything outside, the opposite of the cutout a rect's
- * clipped region performs: the caller passes the hole the buffer has to fit
- * into. Coordinates are those of the buffer itself, i.e. relative to its
- * top-left corner.
- *
- * With `soft` set the buffer fades out across the region's edge by the
- * region's own corner coverage, which lets a client surface blend into a
- * rounded border instead of ending on a hard stair-stepped line. A NULL or
- * empty region disables clipping.
+ * Sets the region this buffer is clipped to: it KEEPS the buffer inside and
+ * drops everything outside - the hole the buffer has to fit into. Coordinates
+ * are relative to the buffer's top-left corner; with `soft` set, the buffer
+ * fades across the edge by the region's own corner coverage.
+ * A NULL or empty region disables clipping.
  */
 void wlr_scene_buffer_set_clipped_region(struct wlr_scene_buffer *scene_buffer,
 	struct clipped_region clipped_region);

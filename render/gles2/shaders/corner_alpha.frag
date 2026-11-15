@@ -140,14 +140,8 @@ float cutout_coverage(vec4 edges, vec2 size, vec2 position,
 
 // The keep-inside counterpart of cutout_coverage(): 1.0 for fragments inside
 // the region and 0.0 outside it.
-//
-// This is what a buffer is clipped with, and here the fade is what we want, not
-// what cutout_coverage() suppresses. A client surface drawn into a border's
-// hole has to fade by exactly the coverage the hole used, otherwise the seam
-// between surface and border is either a hard stair-step (a hard clip) or a
-// visible line of the background in between (a clip that follows the curve
-// with a different ramp). The border's ring is solid underneath either way, so
-// fading the surface lets it show through by the complementary amount.
+// A soft clip fades by the region's own corner coverage, so a buffer clipped to
+// a curve blends into what it is drawn over instead of ending on a hard line.
 float inside_coverage(vec4 edges, vec2 size, vec2 position,
 		float radius_tl, float radius_tr, float radius_bl, float radius_br,
 		float exponent, bool soft) {

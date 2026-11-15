@@ -380,12 +380,10 @@ static void scene_node_opaque_region(struct wlr_scene_node *node, int x, int y,
 			pixman_region32_fini(&corners);
 		}
 
-		// Only the part of the buffer inside its clip is opaque. A soft clip
-		// additionally fades along the region's edge, so the pixels its edge
-		// passes through are not fully covered either. The bounding box is
-		// still subtracted as a whole: insetting by the corner radii here would
-		// have to match the shader's ramp exactly, and being too conservative
-		// only costs an overdraw of the pixels along the seam.
+		// Only the part of the buffer inside its clip is opaque: a soft clip's
+		// edge pixels are only partly covered too. The bounding box is subtracted
+		// whole - insetting by the corner radii would have to match the shader's
+		// ramp exactly, and being conservative just overdraws the seam.
 		if (!wlr_box_empty(&scene_buffer->clipped_region.area)) {
 			struct wlr_box *clip = &scene_buffer->clipped_region.area;
 			struct wlr_box inside = {
