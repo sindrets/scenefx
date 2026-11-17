@@ -466,10 +466,12 @@ static void vk_render_pass_add_rect(struct fx_render_pass *fx_pass,
 	wlr_matrix_project_box(matrix, &box, WL_OUTPUT_TRANSFORM_NORMAL, proj);
 	wlr_matrix_multiply(matrix, pass->projection, matrix);
 
-	// An opaque rect whose corners are not rounded replaces what is underneath,
-	// so blending can be skipped; anything else honours the caller's mode.
+	// An opaque rect replaces what is underneath only where it covers whole
+	// pixels. A fractional edge fades by its coverage, and a faded pixel has to
+	// blend to read as the rect's edge.
 	enum wlr_render_blend_mode blend_mode =
-		(options->color.a == 1.0 && !should_clip) ?
+		(options->color.a == 1.0 && !should_clip &&
+			!fbox_has_fractional_edges(&fx_options->frac_box)) ?
 		WLR_RENDER_BLEND_MODE_NONE : options->blend_mode;
 
 	struct vk_pipeline *pipeline = get_vk_quad_pipeline(

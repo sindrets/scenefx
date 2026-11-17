@@ -487,7 +487,9 @@ static void gles2_render_pass_add_rect(struct fx_render_pass *fx_pass,
 	struct wlr_fbox clipped_frac_area = clipped_fregion_frac_area(&fx_options->clipped_region);
 
 	enum wlr_render_blend_mode blend_mode =
-		(color->a == 1.0 && !should_clip) ? WLR_RENDER_BLEND_MODE_NONE : options->blend_mode;
+		(color->a == 1.0 && !should_clip &&
+			!fbox_has_fractional_edges(&frac_box)) ?
+		WLR_RENDER_BLEND_MODE_NONE : options->blend_mode;
 
 	pixman_region32_t clip_region;
 	if (options->clip) {

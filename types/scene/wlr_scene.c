@@ -2235,10 +2235,13 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 				.clipped_region = rect_options.clipped_region,
 			};
 			fx_render_pass_add_rounded_rect(data->fx_pass, &rounded_rect_options);
-		} else if (!wlr_box_empty(&rect_clipped_region_box)) {
-			fx_render_pass_add_rect(data->fx_pass, &rect_options);
-		} else {
+		} else if (wlr_box_empty(&rect_clipped_region_box) &&
+				   !fbox_has_fractional_edges(&dst_frac_box)) {
 			wlr_render_pass_add_rect(data->render_pass, &rect_options.base);
+		} else {
+			/* The plain call cannot cut a clipped region out of the rect, and
+			 * only the fx path fades a rect whose edges miss the pixel grid. */
+			fx_render_pass_add_rect(data->fx_pass, &rect_options);
 		}
 		break;
 	case WLR_SCENE_NODE_BUFFER:;
